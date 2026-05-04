@@ -1,0 +1,46 @@
+# Dependencies
+node_modules/
+vendor/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.eggs/
+
+# Env & secrets
+.env
+.env.*
+!.env.example
+
+# Build outputs
+dist/
+build/
+out/
+*.local
+
+# Logs & caches
+*.log
+.cache/
+.parcel-cache/
+.turbo/
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Local DB dumps / binaries (adjust if you version schema-only files)
+database/*.db
+database/*.sqlite
+database/*.sqlite3
+database/*.sqlite-shm
+database/*.sqlite-wal
+database/*.sqlite-journal
+database/*.sqlite-shm
+database/*.sqlite-wal
+database/*.sqlite-journal

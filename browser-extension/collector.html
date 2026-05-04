@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>东方财富采集控制台</title>
+  <link rel="stylesheet" href="src/popup.css">
+</head>
+<body class="full-page">
+  <main class="app">
+    <header>
+      <h1>东方财富采集</h1>
+      <span id="statusPill" class="pill">idle</span>
+    </header>
+
+    <nav class="tabs" aria-label="采集类型">
+      <button id="dailyTab" class="tab-button active" data-dataset="stock_daily">股票日线数据</button>
+      <button id="moneyFlowTab" class="tab-button" data-dataset="stock_money_flow">个股资金流数据</button>
+    </nav>
+
+    <section class="panel">
+      <label for="serviceBaseUrl">本地服务</label>
+      <input id="serviceBaseUrl" value="http://127.0.0.1:17890" spellcheck="false">
+    </section>
+
+    <section class="panel compact">
+      <label for="pageIntervalMs">基础间隔</label>
+      <div class="inline-control">
+        <input id="pageIntervalMs" type="number" min="500" step="100" value="1000">
+        <span>ms</span>
+      </div>
+    </section>
+
+    <section class="grid">
+      <div>
+        <span class="label">类型</span>
+        <strong id="datasetState">-</strong>
+      </div>
+      <div>
+        <span class="label">目标页面</span>
+        <strong id="targetState">-</strong>
+      </div>
+      <div>
+        <span class="label">分页器</span>
+        <strong id="pagerState">-</strong>
+      </div>
+      <div>
+        <span class="label">页面</span>
+        <strong id="pageState">-</strong>
+      </div>
+      <div>
+        <span class="label">截获页</span>
+        <strong id="captureState">-</strong>
+      </div>
+      <div>
+        <span class="label">本页条数</span>
+        <strong id="rowCount">-</strong>
+      </div>
+      <div>
+        <span class="label">累计条数</span>
+        <strong id="rowsSeen">-</strong>
+      </div>
+      <div>
+        <span class="label">已入库</span>
+        <strong id="rowsSubmitted">-</strong>
+      </div>
+      <div>
+        <span class="label">批次</span>
+        <strong id="runId">-</strong>
+      </div>
+      <div>
+        <span class="label">自动翻页</span>
+        <strong id="autoState">-</strong>
+      </div>
+      <div>
+        <span class="label">下次点击</span>
+        <strong id="nextClickAt">-</strong>
+      </div>
+      <div>
+        <span class="label">随机抖动</span>
+        <strong id="jitterState">-</strong>
+      </div>
+    </section>
+
+    <section class="buttons">
+      <button id="startButton">一键采集</button>
+      <button id="pauseButton">暂停</button>
+      <button id="resumeButton">继续</button>
+      <button id="nextButton">下一页</button>
+      <button id="stopButton">停止</button>
+      <button id="healthButton">测试服务</button>
+    </section>
+
+    <section class="panel">
+      <span class="label">最近接口</span>
+      <p id="lastUrl" class="mono">-</p>
+    </section>
+
+    <section class="panel">
+      <span class="label">日志</span>
+      <ol id="log"></ol>
+    </section>
+  </main>
+  <script src="src/popup.js"></script>
+</body>
+</html>
