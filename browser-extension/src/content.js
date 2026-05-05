@@ -86,6 +86,15 @@ function findNextLink(datasetKey = "stock_daily") {
   });
 }
 
+function dispatchMouse(target, type) {
+  target.dispatchEvent(new MouseEvent(type, {
+    bubbles: true,
+    cancelable: true,
+    view: window,
+    button: 0
+  }));
+}
+
 function getPageInfo(datasetKey = "stock_daily") {
   const root = pagerRoot(datasetKey);
   const next = findNextLink(datasetKey);
@@ -108,8 +117,10 @@ function clickNextPage(datasetKey = "stock_daily") {
     return { ok: false, error: "Next page link was not found.", before, after: getPageInfo(datasetKey) };
   }
 
-  next.dispatchEvent(new MouseEvent("mouseover", { bubbles: true, cancelable: true, view: window }));
-  next.click();
+  dispatchMouse(next, "mouseover");
+  dispatchMouse(next, "mousedown");
+  dispatchMouse(next, "mouseup");
+  dispatchMouse(next, "click");
   return { ok: true, before, after: getPageInfo(datasetKey) };
 }
 
