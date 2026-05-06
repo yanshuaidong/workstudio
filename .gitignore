@@ -23,6 +23,7 @@ out/
 
 # Logs & caches
 *.log
+backend/backend_prod.pid
 .cache/
 .parcel-cache/
 .turbo/
