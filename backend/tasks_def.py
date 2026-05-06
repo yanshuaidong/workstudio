@@ -11,8 +11,8 @@ TASKS: list[dict] = [
         "source": "eastmoney_qt_clist",
         "dataset_key": "stock_daily",
         "remote_table": "stock_daily",
-        "timeout_seconds": 1800,
-        "page_interval_ms": 1000,
+        "timeout_seconds": 3600,
+        "page_interval_ms": 2500,
         "close_tab_on_finish": 1,
     },
     {
@@ -25,8 +25,8 @@ TASKS: list[dict] = [
         "source": "eastmoney_stock_money_flow",
         "dataset_key": "stock_money_flow",
         "remote_table": "stock_individual_fund_flow",
-        "timeout_seconds": 1800,
-        "page_interval_ms": 1000,
+        "timeout_seconds": 3600,
+        "page_interval_ms": 2500,
         "close_tab_on_finish": 1,
     },
 ]

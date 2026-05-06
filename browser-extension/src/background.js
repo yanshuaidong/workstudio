@@ -2,8 +2,8 @@
 
 const TARGET_PATH = "/api/qt/clist/get";
 const DEFAULT_LOCAL_SERVICE = "http://127.0.0.1:17890";
-const DEFAULT_PAGE_INTERVAL_MS = 1000;
-const MIN_PAGE_INTERVAL_MS = 500;
+const DEFAULT_PAGE_INTERVAL_MS = 2500;
+const MIN_PAGE_INTERVAL_MS = 800;
 const EXTENSION_CLIENT_ID = "ws-ext-1";
 const HEARTBEAT_INTERVAL_MS = 30000;
 const COMMAND_POLL_INTERVAL_MS = 5000;
@@ -395,7 +395,7 @@ async function handleCommand(cmd) {
   switch (command_type) {
 
     case "open_task_tab": {
-      const { run_id, task_key, dataset_key, target_url, page_interval_ms = 1000, mode } = payload;
+      const { run_id, task_key, dataset_key, target_url, page_interval_ms = 2500, mode } = payload;
       // Open a new tab for this task
       const tab = await chrome.tabs.create({ url: target_url, active: false });
       const tabId = tab.id;
@@ -430,7 +430,7 @@ async function handleCommand(cmd) {
     }
 
     case "start_capture": {
-      const { run_id, tab_id, dataset_key, page_interval_ms = 1000 } = payload;
+      const { run_id, tab_id, dataset_key, page_interval_ms = 2500 } = payload;
       if (!tab_id || !(await tabExists(tab_id))) break;
       const session = getSession(tab_id);
       session.datasetKey = dataset_key;

@@ -181,7 +181,7 @@ def _start_task(task_run: dict, db):
         "dataset_key": task.get("dataset_key", task_run["task_key"]),
         "target_url": task_run["target_url"],
         "trade_date": task_run.get("trade_date") or task_run["schedule_date"],
-        "page_interval_ms": task.get("page_interval_ms", 1000),
+        "page_interval_ms": task.get("page_interval_ms", 2500),
         "mode": task_run["mode"],
     })
     log_event(db, task_run["run_id"], task_run["schedule_date"], task_run["task_key"],

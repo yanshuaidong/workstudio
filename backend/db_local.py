@@ -120,8 +120,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     source TEXT NOT NULL,
     dataset_key TEXT NOT NULL,
     remote_table TEXT NOT NULL,
-    timeout_seconds INTEGER NOT NULL DEFAULT 1800,
-    page_interval_ms INTEGER NOT NULL DEFAULT 1000,
+    timeout_seconds INTEGER NOT NULL DEFAULT 3600,
+    page_interval_ms INTEGER NOT NULL DEFAULT 2500,
     close_tab_on_finish INTEGER NOT NULL DEFAULT 1,
     updated_at TEXT NOT NULL
 );
@@ -279,6 +279,12 @@ def _seed_tasks(db_path: Path) -> None:
                     source=excluded.source,
                     dataset_key=excluded.dataset_key,
                     remote_table=excluded.remote_table,
+                    timeout_seconds = CASE
+                        WHEN timeout_seconds = 1800 THEN excluded.timeout_seconds
+                        ELSE timeout_seconds END,
+                    page_interval_ms = CASE
+                        WHEN page_interval_ms = 1000 THEN excluded.page_interval_ms
+                        ELSE page_interval_ms END,
                     updated_at=excluded.updated_at
                 """,
                 (
