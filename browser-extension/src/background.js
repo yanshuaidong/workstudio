@@ -441,6 +441,8 @@ async function handleCommand(cmd) {
       await ensureListening(tab_id);
       session.status = "auto_listening";
       session.startedAt = new Date().toISOString();
+      session.lastScheduledPn = null;
+      await hydrateLastCaptureIntoSession(session);
       if (session.lastCapture) {
         await scheduleNextPage(tab_id, session.lastCapture);
       } else {
@@ -541,6 +543,7 @@ function armPageResponseTimer(tabId, expectedPn, retryCount, datasetKey) {
     session.lastError = `第${expectedPn}页响应超时，重试 ${nextRetry}/${PAGE_RETRY_MAX}`;
     await publishStatus(tabId);
     try {
+      if (session.lastCapture?.pn) await syncPagerBeforeNextPage(tabId, session.lastCapture, datasetKey);
       const result = await sendToContent(tabId, { type: "CLICK_NEXT_PAGE", datasetKey });
       if (!result?.ok) throw new Error(result?.error || "retry click failed");
       session.status = "waiting_response";
@@ -649,6 +652,7 @@ async function scheduleNextPage(tabId, capture) {
       activeSession.nextClickAt = null;
       activeSession.nextDelayMs = null;
       await publishStatus(tabId);
+      await syncPagerBeforeNextPage(tabId, capture, activeSession.datasetKey);
       const result = await sendToContent(tabId, { type: "CLICK_NEXT_PAGE", datasetKey: activeSession.datasetKey });
       if (!result?.ok) throw new Error(result?.error || "Click next page failed.");
       activeSession.status = "waiting_response";
@@ -792,6 +796,38 @@ async function activeTab() {
   return tab;
 }
 
+async function hydrateLastCaptureIntoSession(session) {
+  if (session.lastCapture?.pn) return;
+  try {
+    const stored = await chrome.storage.local.get(["lastCapture"]);
+    const lc = stored?.lastCapture;
+    if (!lc || Number(lc.pn) <= 0) return;
+    const dk = session.datasetKey || "stock_daily";
+    if (lc.datasetKey != null && lc.datasetKey !== dk) return;
+    session.lastCapture = lc;
+  } catch {
+    // best-effort
+  }
+}
+
+/**
+ * 上一页数据已采集完成时，列表应仍停留在 lastCaptured.pn；验证码后整页常回到第 1 页，
+ * 在点击「下一页」前必须把分页器对齐，否则会继续从错误页收集。
+ */
+async function syncPagerBeforeNextPage(tabId, lastCaptured, datasetKey) {
+  if (!lastCaptured?.pn) return { ok: true };
+  const result = await sendToContent(tabId, {
+    type: "GO_TO_PAGE",
+    datasetKey,
+    targetPn: lastCaptured.pn,
+    options: { maxSteps: 250, settleMs: 200 }
+  });
+  if (!result?.ok) {
+    throw new Error(result?.error || `分页未对齐到第 ${lastCaptured.pn} 页`);
+  }
+  return result;
+}
+
 async function sendToContent(tabId, message) {
   try {
     return await chrome.tabs.sendMessage(tabId, message);
@@ -841,8 +877,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     if (message.type === "GET_STATUS") {
       const datasetKey = message.datasetKey || "stock_daily";
-      const active = await activeTab().catch(() => null);
-      const target = await findTargetTab(datasetKey, active?.windowId ?? sender.tab?.windowId ?? null);
+      let target = null;
+      const hintTabId = message.tabId;
+      if (hintTabId != null && (await tabExists(hintTabId))) {
+        const tab = await chrome.tabs.get(hintTabId).catch(() => null);
+        if (tab?.id != null && pageMatchesDataset(tab.url, datasetKey)) target = tab;
+      }
+      if (!target?.id) {
+        const active = await activeTab().catch(() => null);
+        target = await findTargetTab(datasetKey, active?.windowId ?? sender.tab?.windowId ?? null);
+      }
       const session = target?.id != null ? getSession(target.id) : blankSession(null, datasetKey);
       if (target?.id != null && message.datasetKey && !session.autoRunning) session.datasetKey = datasetKey;
       sendResponse({ ok: true, session: publicSession(session) });
@@ -885,6 +929,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         activeSession.status = activeSession.autoRunning ? "auto_listening" : "listening";
         activeSession.startedAt = new Date().toISOString();
         activeSession.lastError = "";
+        activeSession.lastScheduledPn = null;
+        await hydrateLastCaptureIntoSession(activeSession);
         await publishStatus(tabId);
         if (activeSession.autoRunning && activeSession.lastCapture) {
           await scheduleNextPage(tabId, activeSession.lastCapture);
@@ -911,6 +957,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         session.pageIntervalMs = Math.max(MIN_PAGE_INTERVAL_MS, Number(message.pageIntervalMs || session.pageIntervalMs || DEFAULT_PAGE_INTERVAL_MS));
         session.autoRunning = true;
         session.status = "auto_listening";
+        session.lastScheduledPn = null;
+        await hydrateLastCaptureIntoSession(session);
         await ensureListening(tabId);
         await publishStatus(tabId);
         if (session.lastCapture) {

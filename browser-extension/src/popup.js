@@ -380,6 +380,7 @@ function renderDashboard(d) {
   renderTaskList(d.task_runs);
   renderCurrentDetail(d);
   renderLog(d.recent_events);
+  updateCollectorExtControls().catch(() => {});
 }
 
 // --------------------------------------------------------------------------- //
@@ -428,9 +429,77 @@ window.retryRemote = async function(runId) {
 
 function addLocalLog(msg) {
   const list = $("logList");
+  if (!list) return;
   const li = document.createElement("li");
   li.innerHTML = `<span class="log-time">${new Date().toLocaleTimeString()}</span><span class="log-level info">[UI]</span><span class="log-msg">${msg}</span>`;
   list.prepend(li);
+}
+
+function appendToolbarLog(msg) {
+  const log = $("log");
+  if (!log) return;
+  const li = document.createElement("li");
+  li.textContent = `${new Date().toLocaleTimeString()} ${msg}`;
+  log.prepend(li);
+}
+
+function isDashboardRunActive(run) {
+  return Boolean(run && !["completed", "failed", "timeout", "cancelled", "not_started"].includes(run.status));
+}
+
+function activeDatasetKeyFromToolbar() {
+  const el = document.querySelector(".tab-button.active[data-dataset]");
+  return el?.getAttribute("data-dataset") || "stock_daily";
+}
+
+async function fetchExtensionSessionForDashboardRun(run) {
+  const msg = { type: "GET_STATUS", datasetKey: run.task_key || "stock_daily" };
+  if (run.tab_id != null && Number.isFinite(Number(run.tab_id))) msg.tabId = Number(run.tab_id);
+  return chrome.runtime.sendMessage(msg);
+}
+
+async function updateCollectorExtControls() {
+  const pauseBtn = $("collectorPauseBtn");
+  const resumeBtn = $("collectorResumeBtn");
+  const statusEl = $("collectorExtStatus");
+  if (!pauseBtn || !resumeBtn) return;
+
+  const run = _dashboard?.current_run;
+  if (!isDashboardRunActive(run)) {
+    pauseBtn.disabled = true;
+    resumeBtn.disabled = true;
+    if (statusEl) statusEl.textContent = "无进行中的采集任务";
+    return;
+  }
+
+  try {
+    const res = await fetchExtensionSessionForDashboardRun(run);
+    const s = res?.session;
+    const auto = Boolean(s?.autoRunning);
+    const st = s?.status || "idle";
+    pauseBtn.disabled = !auto;
+    resumeBtn.disabled = auto;
+    if (statusEl) {
+      const hasTab = s?.tabId != null;
+      if (!hasTab) {
+        statusEl.textContent = "扩展：未挂接到浏览器标签页，请保持东方财富采集页打开";
+      } else if (auto) {
+        statusEl.textContent = `扩展：自动翻页中（${st}）`;
+      } else {
+        statusEl.textContent = `扩展：已暂停，点「继续」恢复（${st}）`;
+      }
+    }
+  } catch (e) {
+    pauseBtn.disabled = false;
+    resumeBtn.disabled = false;
+    if (statusEl) statusEl.textContent = `扩展：状态读取失败（${e.message || e}）`;
+  }
+}
+
+async function sendDashboardPauseResume(commandType, run) {
+  const msg = { type: commandType, datasetKey: run.task_key || "stock_daily" };
+  if (run.tab_id != null && Number.isFinite(Number(run.tab_id))) msg.tabId = Number(run.tab_id);
+  return chrome.runtime.sendMessage(msg);
 }
 
 // --------------------------------------------------------------------------- //
@@ -515,6 +584,62 @@ document.querySelectorAll(".tab").forEach(tab => {
     if (panel) panel.classList.add("active");
   });
 });
+
+const collectorPauseBtn = $("collectorPauseBtn");
+const collectorResumeBtn = $("collectorResumeBtn");
+if (collectorPauseBtn && collectorResumeBtn) {
+  collectorPauseBtn.addEventListener("click", async () => {
+    const run = _dashboard?.current_run;
+    if (!isDashboardRunActive(run)) return;
+    try {
+      const r = await sendDashboardPauseResume("PAUSE_AUTO_CAPTURE", run);
+      addLocalLog(r?.ok ? "已暂停自动翻页（可去页面过验证后再点「继续」）" : `暂停失败：${r?.error || "未知"}`);
+      await updateCollectorExtControls();
+    } catch (e) {
+      addLocalLog("暂停失败：" + (e.message || String(e)));
+    }
+  });
+  collectorResumeBtn.addEventListener("click", async () => {
+    const run = _dashboard?.current_run;
+    if (!isDashboardRunActive(run)) return;
+    try {
+      const r = await sendDashboardPauseResume("RESUME_AUTO_CAPTURE", run);
+      addLocalLog(r?.ok ? "已继续自动采集" : `继续失败：${r?.error || "未知"}`);
+      await updateCollectorExtControls();
+    } catch (e) {
+      addLocalLog("继续失败：" + (e.message || String(e)));
+    }
+  });
+}
+
+const pauseButton = $("pauseButton");
+const resumeButton = $("resumeButton");
+if (pauseButton && resumeButton) {
+  pauseButton.addEventListener("click", async () => {
+    try {
+      const r = await chrome.runtime.sendMessage({
+        type: "PAUSE_AUTO_CAPTURE",
+        datasetKey: activeDatasetKeyFromToolbar()
+      });
+      appendToolbarLog(r?.ok ? "已暂停自动翻页" : (r?.error || "暂停失败"));
+    } catch (e) {
+      appendToolbarLog("暂停失败：" + (e.message || String(e)));
+    }
+  });
+  resumeButton.addEventListener("click", async () => {
+    try {
+      const interval = Math.max(800, Number($("pageIntervalMs")?.value) || 2500);
+      const r = await chrome.runtime.sendMessage({
+        type: "RESUME_AUTO_CAPTURE",
+        datasetKey: activeDatasetKeyFromToolbar(),
+        pageIntervalMs: interval
+      });
+      appendToolbarLog(r?.ok ? "已继续自动翻页" : (r?.error || "继续失败"));
+    } catch (e) {
+      appendToolbarLog("继续失败：" + (e.message || String(e)));
+    }
+  });
+}
 
 // Receive live status updates from background.js
 chrome.runtime.onMessage.addListener((message) => {

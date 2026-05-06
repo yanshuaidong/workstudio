@@ -122,6 +122,13 @@
       <button class="btn" id="healthBtn">连接测试</button>
       <span id="serviceStatus" class="text-dim">-</span>
     </div>
+    <div class="divider" style="margin:10px 0 8px"></div>
+    <div class="service-row" style="align-items:center">
+      <span style="font-size:12px;color:var(--text-dim);white-space:nowrap;">扩展采集</span>
+      <button class="btn" id="collectorPauseBtn" type="button" disabled>暂停</button>
+      <button class="btn primary" id="collectorResumeBtn" type="button" disabled>继续</button>
+      <span id="collectorExtStatus" class="text-dim" style="font-size:12px;flex:1;min-width:160px">—</span>
+    </div>
   </div>
 
   <!-- Today overview -->
@@ -214,6 +221,7 @@
       <div class="intervention-hint"><strong>接口无响应：</strong>确认页面是否加载出表格数据。尝试关闭并重开目标页，然后点击「当天重跑」。</div>
       <div class="intervention-hint"><strong>远端写入失败：</strong>本地数据已保留，检查 <code>.env</code> 中 MySQL 连接配置和远端表结构，然后在任务列表中点击「重试远端写入」。</div>
       <div class="intervention-hint"><strong>任务超时：</strong>查看日志确认卡在哪一页，必要时点击「当天重跑」重启该任务。</div>
+      <div class="intervention-hint"><strong>临时暂停翻页：</strong>在「本地服务」卡片中点击「暂停」可停止自动翻页（已挂接的监听仍保留）；处理完验证码后点「继续」会从当前进度接着跑。Toolbar 弹出页里同样有暂停/继续。</div>
       <div class="intervention-hint"><strong>交易日未知：</strong>调用 <code>POST /trading-calendar</code> 接口补充今日交易日配置，或在手动模式下手动启动。</div>
     </div>
   </div>
