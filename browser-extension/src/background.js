@@ -652,7 +652,15 @@ async function scheduleNextPage(tabId, capture) {
       activeSession.nextClickAt = null;
       activeSession.nextDelayMs = null;
       await publishStatus(tabId);
-      await syncPagerBeforeNextPage(tabId, capture, activeSession.datasetKey);
+
+      // 分页器对齐：失败时等 1.5s 再重试一次（应对页面刚加载完未稳定的情况）
+      try {
+        await syncPagerBeforeNextPage(tabId, capture, activeSession.datasetKey);
+      } catch (syncErr) {
+        await new Promise(r => setTimeout(r, 1500));
+        await syncPagerBeforeNextPage(tabId, capture, activeSession.datasetKey);
+      }
+
       const result = await sendToContent(tabId, { type: "CLICK_NEXT_PAGE", datasetKey: activeSession.datasetKey });
       if (!result?.ok) throw new Error(result?.error || "Click next page failed.");
       activeSession.status = "waiting_response";
@@ -913,30 +921,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     switch (message.type) {
       case "START_CAPTURE": {
-        const datasetKey = message.datasetKey || session.datasetKey || "stock_daily";
-        if (session.datasetKey !== datasetKey) {
-          const keepServiceBaseUrl = session.serviceBaseUrl;
-          const keepInterval = session.pageIntervalMs;
-          stopAutoPaging(tabId);
-          sessions.set(tabId, { ...blankSession(tabId, datasetKey), serviceBaseUrl: keepServiceBaseUrl, pageIntervalMs: keepInterval });
-        }
+        const datasetKey = message.datasetKey || "stock_daily";
+        const svcUrl = message.serviceBaseUrl || session.serviceBaseUrl || DEFAULT_LOCAL_SERVICE;
+        const intervalMs = Math.max(MIN_PAGE_INTERVAL_MS, Number(message.pageIntervalMs || DEFAULT_PAGE_INTERVAL_MS));
+        // 始终重置为全新 session，避免延续上次的 lastCapture
+        stopAutoPaging(tabId);
+        sessions.set(tabId, blankSession(tabId, datasetKey));
         const activeSession = getSession(tabId);
-        activeSession.datasetKey = datasetKey;
-        activeSession.serviceBaseUrl = message.serviceBaseUrl || activeSession.serviceBaseUrl || DEFAULT_LOCAL_SERVICE;
-        activeSession.pageIntervalMs = Math.max(MIN_PAGE_INTERVAL_MS, Number(message.pageIntervalMs || activeSession.pageIntervalMs || DEFAULT_PAGE_INTERVAL_MS));
-        activeSession.autoRunning = Boolean(message.autoRunning);
+        activeSession.serviceBaseUrl = svcUrl;
+        activeSession.pageIntervalMs = intervalMs;
+        activeSession.autoRunning = true;
         await ensureListening(tabId);
-        activeSession.status = activeSession.autoRunning ? "auto_listening" : "listening";
+        activeSession.status = "auto_listening";
         activeSession.startedAt = new Date().toISOString();
-        activeSession.lastError = "";
-        activeSession.lastScheduledPn = null;
-        await hydrateLastCaptureIntoSession(activeSession);
         await publishStatus(tabId);
-        if (activeSession.autoRunning && activeSession.lastCapture) {
-          await scheduleNextPage(tabId, activeSession.lastCapture);
-        } else if (activeSession.autoRunning) {
-          await reloadTargetPage(tabId);
-        }
+        await reloadTargetPage(tabId); // 永远从第 1 页重新采集
         sendResponse({ ok: true, session: publicSession(activeSession) });
         break;
       }
@@ -956,14 +955,43 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         session.datasetKey = message.datasetKey || session.datasetKey || "stock_daily";
         session.pageIntervalMs = Math.max(MIN_PAGE_INTERVAL_MS, Number(message.pageIntervalMs || session.pageIntervalMs || DEFAULT_PAGE_INTERVAL_MS));
         session.autoRunning = true;
-        session.status = "auto_listening";
+        session.status = "resuming";
         session.lastScheduledPn = null;
+        session.lastError = "";
         await hydrateLastCaptureIntoSession(session);
         await ensureListening(tabId);
         await publishStatus(tabId);
-        if (session.lastCapture) {
+
+        if (session.lastCapture?.pn) {
+          // 先把页面导航到正确 URL，确保 content script 在目标页
+          try {
+            const tab = await chrome.tabs.get(tabId).catch(() => null);
+            if (tab && !pageMatchesDataset(tab.url, session.datasetKey)) {
+              await chrome.tabs.update(tabId, { url: datasetConfig(session.datasetKey).pageUrl });
+              await waitForTabLoad(tabId, 30000);
+            }
+          } catch { /* ignore navigation error */ }
+
+          // 把分页器对齐到上次截获的页码，再进入调度循环
+          try {
+            session.status = "syncing_pager";
+            await publishStatus(tabId);
+            await sendToContent(tabId, {
+              type: "GO_TO_PAGE",
+              datasetKey: session.datasetKey,
+              targetPn: session.lastCapture.pn,
+              options: { maxSteps: 300, settleMs: 500 }
+            });
+          } catch (syncErr) {
+            // 对齐失败不阻断：scheduleNextPage 内部仍会再次尝试
+            session.lastError = `初始对齐失败(${syncErr.message})，仍将尝试继续`;
+          }
+
+          session.status = "auto_listening";
+          await publishStatus(tabId);
           await scheduleNextPage(tabId, session.lastCapture);
         } else {
+          // 没有历史记录则从头开始
           await reloadTargetPage(tabId);
         }
         sendResponse({ ok: true, session: publicSession(session) });

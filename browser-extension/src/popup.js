@@ -272,8 +272,9 @@ function renderTaskList(taskRuns) {
     const pill = `<span class="pill ${statusPillClass(tr.status)}">${statusLabel(tr.status)}</span>`;
     const dur = fmtDuration(tr.started_at, tr.finished_at);
 
-    // Action buttons
+    // Action buttons — 按执行顺序排列
     const btns = [];
+    // ① 启动/重跑
     if (["not_started", "failed", "timeout", "cancelled", "completed"].includes(tr.status)) {
       if (tr.run_id) {
         btns.push(`<button class="btn" data-action="retryToday" data-run-id="${escapeAttr(tr.run_id)}">当天重跑</button>`);
@@ -281,9 +282,18 @@ function renderTaskList(taskRuns) {
         btns.push(`<button class="btn primary" data-action="startManual" data-task-key="${escapeAttr(tr.task_key)}">手动启动</button>`);
       }
     }
+    // ② 暂停 / ③ 继续 — 仅在数据采集阶段显示（上传阶段不需要）
+    const isFetchPhase = ["pending", "opening_tab", "page_ready", "capturing", "receiving_page"].includes(tr.status);
+    if (isFetchPhase && tr.run_id) {
+      const tabIdAttr = escapeAttr(String(tr.tab_id ?? ""));
+      btns.push(`<button class="btn btn-off" data-action="pauseCapture" data-task-key="${escapeAttr(tr.task_key)}" data-tab-id="${tabIdAttr}" id="taskPauseBtn">暂停</button>`);
+      btns.push(`<button class="btn btn-off" data-action="resumeCapture" data-task-key="${escapeAttr(tr.task_key)}" data-tab-id="${tabIdAttr}" id="taskResumeBtn">继续</button>`);
+    }
+    // ④ 停止
     if (!["not_started", "completed", "cancelled"].includes(tr.status) && tr.run_id) {
       btns.push(`<button class="btn danger" data-action="cancelRun" data-run-id="${escapeAttr(tr.run_id)}">停止</button>`);
     }
+    // ⑤ 远端重试（上传阶段，无需暂停继续）
     if (tr.remote_status === "failed" && tr.run_id) {
       btns.push(`<button class="btn" data-action="retryRemote" data-run-id="${escapeAttr(tr.run_id)}">重试远端</button>`);
     }
@@ -305,12 +315,28 @@ function renderTaskList(taskRuns) {
       <span class="btn-group">${btns.join("")}</span>
     `;
     row.querySelectorAll("[data-action]").forEach(btn => {
-      btn.addEventListener("click", () => {
+      btn.addEventListener("click", async () => {
         const action = btn.dataset.action;
-        if (action === "startManual") startManual(btn.dataset.taskKey);
-        if (action === "retryToday") retryToday(btn.dataset.runId);
-        if (action === "cancelRun") cancelRun(btn.dataset.runId);
-        if (action === "retryRemote") retryRemote(btn.dataset.runId);
+        if (action === "startManual") await startManual(btn.dataset.taskKey);
+        if (action === "retryToday") await retryToday(btn.dataset.runId);
+        if (action === "cancelRun") await cancelRun(btn.dataset.runId);
+        if (action === "retryRemote") await retryRemote(btn.dataset.runId);
+        if (action === "pauseCapture") {
+          try {
+            const run = { task_key: btn.dataset.taskKey, tab_id: btn.dataset.tabId };
+            const r = await sendDashboardPauseResume("PAUSE_AUTO_CAPTURE", run);
+            addLocalLog(r?.ok ? "已暂停自动翻页（可去页面过验证后再点「继续」）" : `暂停失败：${r?.error || "未知"}`);
+            await updateCollectorExtControls();
+          } catch (e) { addLocalLog("暂停失败：" + (e.message || String(e))); }
+        }
+        if (action === "resumeCapture") {
+          try {
+            const run = { task_key: btn.dataset.taskKey, tab_id: btn.dataset.tabId };
+            const r = await sendDashboardPauseResume("RESUME_AUTO_CAPTURE", run, { pageIntervalMs: 2500 });
+            addLocalLog(r?.ok ? "已恢复采集（正在对齐分页器…）" : `继续失败：${r?.error || "未知"}`);
+            await updateCollectorExtControls();
+          } catch (e) { addLocalLog("继续失败：" + (e.message || String(e))); }
+        }
       });
     });
     list.appendChild(row);
@@ -487,16 +513,15 @@ async function fetchExtensionSessionForDashboardRun(run) {
 }
 
 async function updateCollectorExtControls() {
-  const pauseBtn = $("collectorPauseBtn");
-  const resumeBtn = $("collectorResumeBtn");
-  const statusEl = $("collectorExtStatus");
-  if (!pauseBtn || !resumeBtn) return;
+  // 操作任务行内动态生成的暂停/继续按钮
+  const pauseBtn = $("taskPauseBtn");
+  const resumeBtn = $("taskResumeBtn");
+  if (!pauseBtn && !resumeBtn) return; // 当前无采集中的任务行
 
   const run = _dashboard?.current_run;
   if (!isDashboardRunActive(run)) {
-    pauseBtn.disabled = true;
-    resumeBtn.disabled = true;
-    if (statusEl) statusEl.textContent = "无进行中的采集任务";
+    if (pauseBtn) pauseBtn.classList.add("btn-off");
+    if (resumeBtn) resumeBtn.classList.add("btn-off");
     return;
   }
 
@@ -504,28 +529,18 @@ async function updateCollectorExtControls() {
     const res = await fetchExtensionSessionForDashboardRun(run);
     const s = res?.session;
     const auto = Boolean(s?.autoRunning);
-    const st = s?.status || "idle";
-    pauseBtn.disabled = !auto;
-    resumeBtn.disabled = auto;
-    if (statusEl) {
-      const hasTab = s?.tabId != null;
-      if (!hasTab) {
-        statusEl.textContent = "扩展：未挂接到浏览器标签页，请保持东方财富采集页打开";
-      } else if (auto) {
-        statusEl.textContent = `扩展：自动翻页中（${st}）`;
-      } else {
-        statusEl.textContent = `扩展：已暂停，点「继续」恢复（${st}）`;
-      }
-    }
-  } catch (e) {
-    pauseBtn.disabled = false;
-    resumeBtn.disabled = false;
-    if (statusEl) statusEl.textContent = `扩展：状态读取失败（${e.message || e}）`;
+    // 正在自动运行 → 暂停可点，继续不可点；已暂停 → 继续可点，暂停不可点
+    if (pauseBtn) pauseBtn.classList.toggle("btn-off", !auto);
+    if (resumeBtn) resumeBtn.classList.toggle("btn-off", auto);
+  } catch {
+    // 查询失败时两个按钮均可点，让用户自行尝试
+    if (pauseBtn) pauseBtn.classList.remove("btn-off");
+    if (resumeBtn) resumeBtn.classList.remove("btn-off");
   }
 }
 
-async function sendDashboardPauseResume(commandType, run) {
-  const msg = { type: commandType, datasetKey: run.task_key || "stock_daily" };
+async function sendDashboardPauseResume(commandType, run, extras = {}) {
+  const msg = { type: commandType, datasetKey: run.task_key || "stock_daily", ...extras };
   if (run.tab_id != null && Number.isFinite(Number(run.tab_id))) msg.tabId = Number(run.tab_id);
   return new Promise((resolve, reject) => {
     chrome.runtime.sendMessage(msg, (res) => {
@@ -630,72 +645,247 @@ document.querySelectorAll(".tab").forEach(tab => {
   });
 });
 
-const collectorPauseBtn = $("collectorPauseBtn");
-const collectorResumeBtn = $("collectorResumeBtn");
-if (collectorPauseBtn && collectorResumeBtn) {
-  collectorPauseBtn.addEventListener("click", async () => {
-    const run = _dashboard?.current_run;
-    if (!isDashboardRunActive(run)) return;
-    try {
-      const r = await sendDashboardPauseResume("PAUSE_AUTO_CAPTURE", run);
-      addLocalLog(r?.ok ? "已暂停自动翻页（可去页面过验证后再点「继续」）" : `暂停失败：${r?.error || "未知"}`);
-      await updateCollectorExtControls();
-    } catch (e) {
-      addLocalLog("暂停失败：" + (e.message || String(e)));
-    }
-  });
-  collectorResumeBtn.addEventListener("click", async () => {
-    const run = _dashboard?.current_run;
-    if (!isDashboardRunActive(run)) return;
-    try {
-      const r = await sendDashboardPauseResume("RESUME_AUTO_CAPTURE", run);
-      addLocalLog(r?.ok ? "已继续自动采集" : `继续失败：${r?.error || "未知"}`);
-      await updateCollectorExtControls();
-    } catch (e) {
-      addLocalLog("继续失败：" + (e.message || String(e)));
-    }
-  });
-}
-
-const pauseButton = $("pauseButton");
-const resumeButton = $("resumeButton");
-if (pauseButton && resumeButton) {
-  pauseButton.addEventListener("click", async () => {
-    try {
-      const r = await chrome.runtime.sendMessage({
-        type: "PAUSE_AUTO_CAPTURE",
-        datasetKey: activeDatasetKeyFromToolbar()
-      });
-      appendToolbarLog(r?.ok ? "已暂停自动翻页" : (r?.error || "暂停失败"));
-    } catch (e) {
-      appendToolbarLog("暂停失败：" + (e.message || String(e)));
-    }
-  });
-  resumeButton.addEventListener("click", async () => {
-    try {
-      const interval = Math.max(800, Number($("pageIntervalMs")?.value) || 2500);
-      const r = await chrome.runtime.sendMessage({
-        type: "RESUME_AUTO_CAPTURE",
-        datasetKey: activeDatasetKeyFromToolbar(),
-        pageIntervalMs: interval
-      });
-      appendToolbarLog(r?.ok ? "已继续自动翻页" : (r?.error || "继续失败"));
-    } catch (e) {
-      appendToolbarLog("继续失败：" + (e.message || String(e)));
-    }
-  });
-}
-
+// --------------------------------------------------------------------------- //
 // Receive live status updates from background.js
+// --------------------------------------------------------------------------- //
 chrome.runtime.onMessage.addListener((message) => {
   if (message.type === "COLLECTOR_STATUS") {
-    // Trigger a refresh when capture activity is detected
     refresh();
   }
 });
 
 // --------------------------------------------------------------------------- //
-// Init
+// Init (collector.html dashboard)
 // --------------------------------------------------------------------------- //
 refresh();
 startRefreshLoop();
+
+// --------------------------------------------------------------------------- //
+// Popup toolbar controller — popup.html ONLY
+// 按执行顺序：一键采集 → 暂停 → 继续 → 下一页 → 停止 → 测试服务
+// 所有按钮始终显示，通过 .btn-off 类区分可点/不可点
+// --------------------------------------------------------------------------- //
+(function initPopupToolbar() {
+  if (!$("startButton")) return; // 非 popup.html，跳过
+
+  const DATASET_LABELS = {
+    stock_daily: "股票日线",
+    stock_money_flow: "个股资金流",
+  };
+
+  const EXT_STATUS_LABELS = {
+    idle: "空闲",
+    auto_listening: "监听中",
+    listening: "监听中",
+    reloading_target: "刷新页面",
+    captured: "已截获",
+    submitted: "已提交",
+    waiting_next: "等待翻页",
+    clicking_next: "点击翻页",
+    waiting_response: "等待响应",
+    paused: "已暂停",
+    completed: "已完成",
+    resuming: "恢复中",
+    syncing_pager: "对齐分页",
+    error: "错误",
+    page_turn_error: "翻页失败",
+    submit_error: "提交失败",
+    reload_error: "刷新失败",
+  };
+
+  let _extSession = null;
+  let _pollHandle = null;
+
+  // --- 工具函数 ---
+
+  function setOff(id, off) {
+    const el = $(id);
+    if (el) el.classList.toggle("btn-off", off);
+  }
+
+  function applyButtonStates(sess) {
+    const autoRunning = Boolean(sess?.autoRunning);
+    const attached = Boolean(sess?.attached);
+    const paused = sess?.status === "paused" || sess?.status === "page_turn_error";
+    const hasCapture = Boolean(sess?.lastCapture?.pn);
+
+    // 一键采集：未在自动运行时可点
+    setOff("startButton", autoRunning);
+    // 暂停：正在自动运行时可点
+    setOff("pauseButton", !autoRunning);
+    // 继续：已暂停且有历史页码时可点
+    setOff("resumeButton", !(paused && hasCapture));
+    // 下一页：已挂载且非自动运行时可点（手动模式）
+    setOff("nextButton", !(attached && !autoRunning));
+    // 停止：已挂载时可点
+    setOff("stopButton", !attached);
+    // 测试服务：始终可点（无 btn-off）
+  }
+
+  function updateStatusGrid(sess) {
+    const pill = $("statusPill");
+    if (pill) {
+      const st = sess?.status || "idle";
+      pill.textContent = EXT_STATUS_LABELS[st] || st;
+      const cls = sess?.autoRunning ? "good"
+        : (["error", "page_turn_error", "submit_error", "reload_error"].includes(st) ? "bad"
+          : (["paused", "page_turn_error"].includes(st) ? "warn" : ""));
+      pill.className = `pill${cls ? " " + cls : ""}`;
+    }
+
+    if (!sess) {
+      ["datasetState","targetState","pagerState","pageState","captureState",
+       "rowCount","rowsSeen","rowsSubmitted","runId","autoState","nextClickAt","jitterState"]
+        .forEach(id => setText(id, "-"));
+      return;
+    }
+
+    setText("datasetState", DATASET_LABELS[sess.datasetKey] || sess.datasetKey || "-");
+    setText("targetState", EXT_STATUS_LABELS[sess.status] || sess.status || "-");
+    setText("pagerState", sess.attached ? "已挂载" : "未挂载");
+    setText("pageState", sess.lastCapture?.pn != null ? `第 ${sess.lastCapture.pn} 页` : "-");
+    const totalPgs = (sess.lastCapture?.total && sess.lastCapture?.pz)
+      ? Math.ceil(sess.lastCapture.total / sess.lastCapture.pz) : null;
+    const capturedPgs = Array.isArray(sess.capturedPages) ? sess.capturedPages.length : 0;
+    setText("captureState", totalPgs != null
+      ? `${capturedPgs} / ${totalPgs}`
+      : (capturedPgs > 0 ? String(capturedPgs) : "-"));
+    setText("rowCount", sess.lastCapture?.row_count ?? "-");
+    setText("rowsSeen", sess.rowsSeen ?? "-");
+    setText("rowsSubmitted", sess.rowsSubmitted ?? "-");
+    setText("runId", sess.runId || "-");
+    setText("autoState", sess.autoRunning ? "是" : "否");
+    const clickAt = sess.nextClickAt
+      ? new Date(sess.nextClickAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" })
+      : "-";
+    setText("nextClickAt", clickAt);
+    setText("jitterState", sess.lastJitterSeconds != null
+      ? `${Number(sess.lastJitterSeconds).toFixed(2)}s` : "-");
+
+    const urlEl = $("lastUrl");
+    if (urlEl && sess.lastCapture?.url) urlEl.textContent = sess.lastCapture.url;
+  }
+
+  function sendToBackground(msg) {
+    return new Promise((resolve, reject) => {
+      chrome.runtime.sendMessage(msg, (res) => {
+        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+        else resolve(res);
+      });
+    });
+  }
+
+  async function pollExtStatus() {
+    try {
+      const dk = activeDatasetKeyFromToolbar();
+      const res = await sendToBackground({ type: "GET_STATUS", datasetKey: dk });
+      _extSession = res?.session || null;
+      updateStatusGrid(_extSession);
+      applyButtonStates(_extSession);
+    } catch { /* ignore */ }
+  }
+
+  function startPoll() {
+    if (_pollHandle) clearInterval(_pollHandle);
+    _pollHandle = setInterval(pollExtStatus, 2000);
+    pollExtStatus();
+  }
+
+  // --- Tab 切换（popup.html 用 .tab-button）---
+  document.querySelectorAll(".tab-button").forEach(btn => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".tab-button").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      pollExtStatus();
+    });
+  });
+
+  // --- 实时推送（background 主动通知时刷新）---
+  chrome.runtime.onMessage.addListener((msg) => {
+    if (msg.type !== "COLLECTOR_STATUS") return;
+    const sess = msg.session;
+    if (sess && sess.datasetKey === activeDatasetKeyFromToolbar()) {
+      _extSession = sess;
+      updateStatusGrid(sess);
+      applyButtonStates(sess);
+    }
+  });
+
+  // --- 按钮事件：执行顺序 = 按钮顺序 ---
+
+  $("startButton").addEventListener("click", async () => {
+    if ($("startButton").classList.contains("btn-off")) return;
+    try {
+      const dk = activeDatasetKeyFromToolbar();
+      const interval = Math.max(800, Number($("pageIntervalMs")?.value) || 2500);
+      const svcUrl = $("serviceBaseUrl")?.value?.trim() || DEFAULT_SERVICE;
+      const r = await sendToBackground({
+        type: "START_CAPTURE", datasetKey: dk,
+        pageIntervalMs: interval, serviceBaseUrl: svcUrl, autoRunning: true
+      });
+      appendToolbarLog(r?.ok ? "采集已启动" : (r?.error || "启动失败"));
+    } catch (e) { appendToolbarLog("启动失败：" + e.message); }
+    await pollExtStatus();
+  });
+
+  $("pauseButton").addEventListener("click", async () => {
+    if ($("pauseButton").classList.contains("btn-off")) return;
+    try {
+      const r = await sendToBackground({
+        type: "PAUSE_AUTO_CAPTURE", datasetKey: activeDatasetKeyFromToolbar()
+      });
+      appendToolbarLog(r?.ok ? "已暂停翻页" : (r?.error || "暂停失败"));
+    } catch (e) { appendToolbarLog("暂停失败：" + e.message); }
+    await pollExtStatus();
+  });
+
+  $("resumeButton").addEventListener("click", async () => {
+    if ($("resumeButton").classList.contains("btn-off")) return;
+    try {
+      const interval = Math.max(800, Number($("pageIntervalMs")?.value) || 2500);
+      const r = await sendToBackground({
+        type: "RESUME_AUTO_CAPTURE", datasetKey: activeDatasetKeyFromToolbar(),
+        pageIntervalMs: interval
+      });
+      appendToolbarLog(r?.ok ? "已恢复采集（正在对齐分页器）" : (r?.error || "继续失败"));
+    } catch (e) { appendToolbarLog("继续失败：" + e.message); }
+    await pollExtStatus();
+  });
+
+  $("nextButton").addEventListener("click", async () => {
+    if ($("nextButton").classList.contains("btn-off")) return;
+    try {
+      const r = await sendToBackground({
+        type: "CLICK_NEXT_PAGE", datasetKey: activeDatasetKeyFromToolbar()
+      });
+      appendToolbarLog(r?.ok ? "已点击下一页" : (r?.error || "点击失败"));
+    } catch (e) { appendToolbarLog("下一页失败：" + e.message); }
+    await pollExtStatus();
+  });
+
+  $("stopButton").addEventListener("click", async () => {
+    if ($("stopButton").classList.contains("btn-off")) return;
+    try {
+      const r = await sendToBackground({
+        type: "STOP_CAPTURE", datasetKey: activeDatasetKeyFromToolbar()
+      });
+      appendToolbarLog(r?.ok ? "已停止采集" : (r?.error || "停止失败"));
+    } catch (e) { appendToolbarLog("停止失败：" + e.message); }
+    await pollExtStatus();
+  });
+
+  $("healthButton").addEventListener("click", async () => {
+    const svcUrl = $("serviceBaseUrl")?.value?.trim() || DEFAULT_SERVICE;
+    try {
+      const r = await sendToBackground({ type: "TEST_LOCAL_SERVICE", serviceBaseUrl: svcUrl });
+      const body = r?.result?.body;
+      appendToolbarLog(r?.result?.ok
+        ? `服务正常 v${body?.version || "?"} 远端DB: ${body?.remote_db_ok ? "OK" : "离线"}`
+        : `服务异常: HTTP ${r?.result?.status}`);
+    } catch (e) { appendToolbarLog("测试失败：" + e.message); }
+  });
+
+  // 初始化
+  applyButtonStates(null);
+  startPoll();
+})();

@@ -187,15 +187,22 @@ button {
   cursor: pointer;
 }
 
-.buttons button:first-child {
+.buttons button.btn-primary {
   color: #fff;
   border-color: #1b5fbf;
   background: #1b5fbf;
 }
 
+/* CSS-based inactive state — replaces disabled attribute */
+button.btn-off {
+  opacity: 0.38;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
 button:disabled {
   cursor: not-allowed;
-  opacity: 0.55;
+  opacity: 0.38;
 }
 
 .mono {
