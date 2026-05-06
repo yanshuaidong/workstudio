@@ -6,8 +6,10 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
+import logging
 import os
+import re
+import sys
 
 # Make sure backend/ is on sys.path regardless of cwd
 sys.path.insert(0, os.path.dirname(__file__))
@@ -20,10 +22,23 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 import config as _cfg
+from logging_setup import configure_logging
+
+configure_logging()
+
 import db_local as db
 import scheduler as sched
 from db_remote import test_connection as _test_remote
 from trading_calendar import is_trading_day, today_is_trading_day
+
+
+_LOG_HTTP = logging.getLogger("workstudio.http")
+_ACCESS_STATUS_RE = re.compile(r'" (\d{3}) ')
+
+
+def _status_from_access_message(msg: str) -> int | None:
+    m = _ACCESS_STATUS_RE.search(msg)
+    return int(m.group(1)) if m else None
 
 
 # --------------------------------------------------------------------------- #
@@ -38,7 +53,22 @@ class ApiHandler(BaseHTTPRequestHandler):
         return self.server.db_path  # type: ignore[attr-defined]
 
     def log_message(self, fmt: str, *args: Any) -> None:
-        sys.stderr.write("[%s] %s\n" % (self.log_date_time_string(), fmt % args))
+        msg = fmt % args
+        line = '%s - - [%s] %s' % (
+            self.address_string(),
+            self.log_date_time_string(),
+            msg,
+        )
+        code = _status_from_access_message(msg)
+        log = logging.getLogger("workstudio.http.access")
+        if code is None:
+            log.debug(line)
+        elif code >= 500:
+            log.error(line)
+        elif code >= 400:
+            log.warning(line)
+        else:
+            log.debug(line)
 
     def end_headers(self) -> None:
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -73,28 +103,36 @@ class ApiHandler(BaseHTTPRequestHandler):
         try:
             self._route_get()
         except KeyError as exc:
+            _LOG_HTTP.debug("404 GET %s — %s", self.path, exc)
             self.write_json(404, {"ok": False, "error": f"Not found: {exc}"})
         except Exception as exc:
+            _LOG_HTTP.exception("GET %s failed", self.path)
             self.write_json(500, {"ok": False, "error": f"{type(exc).__name__}: {exc}"})
 
     def do_POST(self) -> None:
         try:
             self._route_post()
         except (KeyError,) as exc:
+            _LOG_HTTP.debug("404 POST %s — %s", self.path, exc)
             self.write_json(404, {"ok": False, "error": f"Not found: {exc}"})
         except ValueError as exc:
+            _LOG_HTTP.warning("400 POST %s — %s", self.path, exc)
             self.write_json(400, {"ok": False, "error": str(exc)})
         except Exception as exc:
+            _LOG_HTTP.exception("POST %s failed", self.path)
             self.write_json(500, {"ok": False, "error": f"{type(exc).__name__}: {exc}"})
 
     def do_PATCH(self) -> None:
         try:
             self._route_patch()
         except (KeyError,) as exc:
+            _LOG_HTTP.debug("404 PATCH %s — %s", self.path, exc)
             self.write_json(404, {"ok": False, "error": f"Not found: {exc}"})
         except ValueError as exc:
+            _LOG_HTTP.warning("400 PATCH %s — %s", self.path, exc)
             self.write_json(400, {"ok": False, "error": str(exc)})
         except Exception as exc:
+            _LOG_HTTP.exception("PATCH %s failed", self.path)
             self.write_json(500, {"ok": False, "error": f"{type(exc).__name__}: {exc}"})
 
     # ----------------------------------------------------------------------- #
@@ -175,8 +213,13 @@ class ApiHandler(BaseHTTPRequestHandler):
                 payload = {}
                 try:
                     payload = json.loads(c["payload_json"] or "{}")
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _LOG_HTTP.warning(
+                        "invalid payload_json for extension command id=%s: %s",
+                        c.get("id"),
+                        exc,
+                    )
+                    payload = {}
                 result.append({"id": c["id"], "command_type": c["command_type"], "payload": payload})
             self.write_json(200, {"ok": True, "commands": result})
             return
@@ -434,13 +477,18 @@ def cmd_serve(args: argparse.Namespace) -> int:
     sched.start_scheduler()
     server = ThreadingHTTPServer((args.host, args.port), ApiHandler)
     server.db_path = db_path  # type: ignore[attr-defined]
-    print(f"Workstudio local server v{_cfg.VERSION}")
-    print(f"Listening on http://{args.host}:{args.port}")
-    print(f"SQLite DB: {db_path}")
+    log = logging.getLogger("workstudio")
+    log.info(
+        "serve v%s http://%s:%s db=%s",
+        _cfg.VERSION,
+        args.host,
+        args.port,
+        db_path,
+    )
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        print("\nStopped.")
+        log.info("stopped by KeyboardInterrupt")
     finally:
         server.server_close()
     return 0
@@ -448,7 +496,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
 
 def cmd_init_db(args: argparse.Namespace) -> int:
     db.init_db(args.db.resolve())
-    print(f"Initialized {args.db.resolve()}")
+    logging.getLogger("workstudio").info("initialized sqlite %s", args.db.resolve())
     return 0
 
 

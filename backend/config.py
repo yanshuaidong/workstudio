@@ -40,3 +40,5 @@ AUTO_TRIGGER_HOUR = 16
 STUCK_WARN_SECONDS = 300
 HEARTBEAT_TIMEOUT_SECONDS = 120
 VERSION = "0.2.0"
+
+# 日志：见 logging_setup.configure_logging()；默认由环境变量 LOG_LEVEL / LOG_FILE 控制

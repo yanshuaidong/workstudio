@@ -11,14 +11,16 @@ Responsibilities:
 from __future__ import annotations
 
 import datetime
+import logging
 import threading
 import time
-import sys
 
 from config import (
     DB_PATH, TASK_TIMEOUT_SECONDS, INTER_TASK_DELAY_SECONDS,
     AUTO_TRIGGER_HOUR,
 )
+
+_logger = logging.getLogger("workstudio.scheduler")
 
 
 # Guard to avoid re-entry
@@ -53,8 +55,8 @@ def _scheduler_loop():
     while True:
         try:
             _tick()
-        except Exception as exc:
-            print(f"[scheduler] error: {exc}", file=sys.stderr)
+        except Exception:
+            _logger.exception("scheduler tick failed")
         time.sleep(30)
 
 
@@ -88,7 +90,11 @@ def _tick():
         except ValueError:
             continue
         if now_dt > dl_dt:
-            _log(f"[scheduler] run {tr['run_id']} deadline exceeded → timeout")
+            _logger.warning(
+                "run %s deadline exceeded → timeout (task=%s)",
+                tr["run_id"],
+                tr.get("task_key"),
+            )
             finish_task_run(db, tr["run_id"], "timeout")
             log_event(db, tr["run_id"], tr["schedule_date"], tr["task_key"],
                       "task_timeout", f"任务「{tr['task_name']}」超时", level="error",
@@ -110,7 +116,7 @@ def _tick():
         ).fetchall()
     for row in local_collected:
         tr = dict(row)
-        _log(f"[scheduler] run {tr['run_id']} local_collected → triggering remote write")
+        _logger.debug("run %s local_collected → triggering remote write", tr["run_id"])
         update_task_run(db, tr["run_id"], status="writing_remote")
         _trigger_remote_write(tr, db)
 
@@ -136,7 +142,12 @@ def _trigger_auto_plan(db, today, tasks, trade_date: str | None = None):
     if auto_runs:
         return  # Already triggered
 
-    _log(f"[scheduler] triggering auto plan for {today}, trade_date={trade_date} ({trade_source})")
+    _logger.info(
+        "triggering auto plan for %s trade_date=%s (%s)",
+        today,
+        trade_date,
+        trade_source,
+    )
     update_schedule_status(db, today, "running", started_at=now_iso(), auto_start_at=now_iso())
 
     enabled_tasks = [t for t in tasks if t["enabled"]]
@@ -161,7 +172,7 @@ def _start_task(task_run: dict, db):
     from db_local import enqueue_command, update_task_run, log_event, now_iso
     from tasks_def import TASK_MAP
     task = TASK_MAP.get(task_run["task_key"], {})
-    _log(f"[scheduler] starting task {task_run['task_key']} run {task_run['run_id']}")
+    _logger.debug("starting task %s run %s", task_run["task_key"], task_run["run_id"])
     update_task_run(db, task_run["run_id"], status="opening_tab", stage="open_tab",
                     started_at=now_iso())
     enqueue_command(db, "open_task_tab", {
@@ -187,7 +198,7 @@ def _schedule_next_task_after_delay(finished_tr: dict, tasks, db, today):
         sorted_tasks = sorted(tasks, key=lambda t: t["task_no"])
         next_tasks = [t for t in sorted_tasks if t["task_no"] > finished_no and t["enabled"]]
         if not next_tasks:
-            _log("[scheduler] no more tasks in auto plan")
+            _logger.debug("no more tasks in auto plan after task_no=%s", finished_no)
             return
         next_key = next_tasks[0]["task_key"]
         next_run = next((r for r in auto_runs if r["task_key"] == next_key
@@ -195,7 +206,7 @@ def _schedule_next_task_after_delay(finished_tr: dict, tasks, db, today):
         if next_run:
             _start_task(next_run, db)
         else:
-            _log(f"[scheduler] no pending run found for next task {next_key}")
+            _logger.warning("no pending auto run for next task_key=%s", next_key)
 
     t = threading.Thread(target=_delayed, daemon=True, name="next_task_delay")
     t.start()
@@ -245,6 +256,11 @@ def _trigger_remote_write(task_run: dict, db):
                 from tasks_def import TASKS
                 _schedule_next_task_after_delay(task_run, TASKS, db, task_run["schedule_date"])
         except Exception as exc:
+            _logger.exception(
+                "remote write failed run_id=%s task_key=%s",
+                run_id,
+                task_key,
+            )
             err = str(exc)
             finish_remote_batch(db, batch_id, "failed", error=err)
             update_task_run(db, run_id, status="failed", error_code="remote_write_error",
@@ -359,6 +375,3 @@ def retry_remote_write(run_id: str, db=None, trade_date: str | None = None) -> N
     update_task_run(db, run_id, status="writing_remote")
     _trigger_remote_write(tr, db)
 
-
-def _log(msg: str) -> None:
-    print(msg, file=sys.stderr)
