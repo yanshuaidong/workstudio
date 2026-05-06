@@ -169,15 +169,17 @@ function renderOverview(d) {
 
   const td = d.is_trading_day;
   const tdEl = $("tradingDayVal");
-  if (td === null || td === undefined) {
-    tdEl.textContent = "未知";
-    tdEl.className = "value text-yellow";
-  } else if (td) {
-    tdEl.textContent = "是";
-    tdEl.className = "value text-green";
-  } else {
-    tdEl.textContent = "否";
-    tdEl.className = "value text-dim";
+  if (tdEl) {
+    if (td === null || td === undefined) {
+      tdEl.textContent = "未知";
+      tdEl.className = "value text-yellow";
+    } else if (td) {
+      tdEl.textContent = "是";
+      tdEl.className = "value text-green";
+    } else {
+      tdEl.textContent = "否";
+      tdEl.className = "value text-dim";
+    }
   }
 
   const sch = d.schedule || {};
@@ -189,12 +191,14 @@ function renderOverview(d) {
 
   // Mode toggle
   const mode = d.run_mode || "manual";
-  $("modeManual").classList.toggle("active", mode === "manual");
-  $("modeAuto").classList.toggle("active", mode === "auto");
+  $("modeManual")?.classList.toggle("active", mode === "manual");
+  $("modeAuto")?.classList.toggle("active", mode === "auto");
 
   // Pills
   const tradingPill = $("tradingPill");
-  if (td === null || td === undefined) {
+  if (!tradingPill) {
+    /* 非看板页面无此节点 */
+  } else if (td === null || td === undefined) {
     tradingPill.textContent = "交易日未知";
     setPillClass(tradingPill, "warn");
   } else if (td) {
@@ -236,6 +240,7 @@ function renderOverview(d) {
 
 function renderAlerts(alerts) {
   const box = $("alertsBox");
+  if (!box) return;
   box.innerHTML = "";
   for (const a of (alerts || [])) {
     const div = document.createElement("div");
@@ -247,6 +252,7 @@ function renderAlerts(alerts) {
 
 function renderTaskList(taskRuns) {
   const list = $("taskList");
+  if (!list) return;
   list.innerHTML = "";
 
   for (const tr of (taskRuns || [])) {
@@ -332,8 +338,10 @@ function _renderDetail(tr) {
   setText("detTaskName", tr.task_name || tr.task_key);
   setText("detRunId", tr.run_id || "-");
   const statusEl = $("detStatus");
-  statusEl.textContent = statusLabel(tr.status);
-  statusEl.className = `value pill ${statusPillClass(tr.status)}`;
+  if (statusEl) {
+    statusEl.textContent = statusLabel(tr.status);
+    statusEl.className = `value pill ${statusPillClass(tr.status)}`;
+  }
   setText("detStage", tr.stage || "-");
   setText("detTradeDate", tr.trade_date || "-");
   setText("detUrl", tr.target_url || "-");
@@ -349,13 +357,16 @@ function _renderDetail(tr) {
   setText("detStarted", fmtTime(tr.started_at));
   setText("detDeadline", fmtTime(tr.deadline_at));
   const errEl = $("detError");
-  errEl.textContent = tr.error_message || "-";
-  errEl.className = tr.error_message ? "value text-red" : "value text-dim";
+  if (errEl) {
+    errEl.textContent = tr.error_message || "-";
+    errEl.className = tr.error_message ? "value text-red" : "value text-dim";
+  }
   setText("detTabId", tr.tab_id != null ? String(tr.tab_id) : "-");
 }
 
 function renderLog(events) {
   const list = $("logList");
+  if (!list) return;
   list.innerHTML = "";
   for (const ev of (events || [])) {
     const li = document.createElement("li");
@@ -380,7 +391,10 @@ function renderDashboard(d) {
   renderTaskList(d.task_runs);
   renderCurrentDetail(d);
   renderLog(d.recent_events);
-  updateCollectorExtControls().catch(() => {});
+  /** 延后读扩展状态，避免 GET_STATUS 与主渲染抢占；超时则不影响表格刷新 */
+  queueMicrotask(() => {
+    updateCollectorExtControls().catch(() => {});
+  });
 }
 
 // --------------------------------------------------------------------------- //
@@ -455,7 +469,21 @@ function activeDatasetKeyFromToolbar() {
 async function fetchExtensionSessionForDashboardRun(run) {
   const msg = { type: "GET_STATUS", datasetKey: run.task_key || "stock_daily" };
   if (run.tab_id != null && Number.isFinite(Number(run.tab_id))) msg.tabId = Number(run.tab_id);
-  return chrome.runtime.sendMessage(msg);
+  const timeoutMs = 5000;
+  return Promise.race([
+    new Promise((resolve, reject) => {
+      chrome.runtime.sendMessage(msg, (res) => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+        resolve(res);
+      });
+    }),
+    new Promise((_, rej) => {
+      setTimeout(() => rej(new Error("扩展状态查询超时")), timeoutMs);
+    })
+  ]);
 }
 
 async function updateCollectorExtControls() {
@@ -499,7 +527,15 @@ async function updateCollectorExtControls() {
 async function sendDashboardPauseResume(commandType, run) {
   const msg = { type: commandType, datasetKey: run.task_key || "stock_daily" };
   if (run.tab_id != null && Number.isFinite(Number(run.tab_id))) msg.tabId = Number(run.tab_id);
-  return chrome.runtime.sendMessage(msg);
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage(msg, (res) => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message));
+        return;
+      }
+      resolve(res);
+    });
+  });
 }
 
 // --------------------------------------------------------------------------- //
@@ -509,14 +545,23 @@ async function sendDashboardPauseResume(commandType, run) {
 async function refresh() {
   try {
     const d = await fetchDashboard();
-    renderDashboard(d);
+    try {
+      renderDashboard(d);
+    } catch (renderErr) {
+      console.error("[collector] renderDashboard", renderErr);
+      setText("overviewText", `看板渲染出错：${renderErr.message || String(renderErr)}（接口已返回数据，可看控制台）`);
+    }
     const svcPill = $("svcPill");
-    svcPill.textContent = "服务在线";
-    setPillClass(svcPill, "good");
+    if (svcPill) {
+      svcPill.textContent = "服务在线";
+      setPillClass(svcPill, "good");
+    }
   } catch (e) {
     const svcPill = $("svcPill");
-    svcPill.textContent = "服务离线";
-    setPillClass(svcPill, "bad");
+    if (svcPill) {
+      svcPill.textContent = "服务离线";
+      setPillClass(svcPill, "bad");
+    }
     setText("overviewText", "本地服务不可用，请检查是否已启动 winrun.cmd");
   }
 }
