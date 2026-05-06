@@ -1,4 +1,4 @@
-# Workstudio 后端 — Windows 生产环境启动（监听与 PID 见 backend_prod.pid）
+﻿# Workstudio 后端 — Windows 生产环境启动（监听与 PID 见 backend_prod.pid）
 # 用法：在 backend 目录执行
 #   powershell -NoProfile -ExecutionPolicy Bypass -File .\start_prod_win.ps1
 # 监听地址与端口由仓库根目录 .env 中的 LOCAL_HOST / LOCAL_PORT 决定（默认见 config.py）。
@@ -74,4 +74,4 @@ $proc.Id | Set-Content -LiteralPath $pidFile -Encoding ascii -NoNewline
 Write-Host "已启动后端 PID=$($proc.Id)"
 Write-Host "标准输出: $logOut"
 Write-Host "错误输出: $logErr"
-Write-Host "停止请运行: powershell -NoProfile -ExecutionPolicy Bypass -File `"$Root\stop_prod_win.ps1`""
+Write-Host ('停止请运行: powershell -NoProfile -ExecutionPolicy Bypass -File "{0}\stop_prod_win.ps1"' -f $Root)

@@ -1,4 +1,4 @@
-# Workstudio 后端 — Windows 生产环境停止（依据 backend_prod.pid）
+﻿# Workstudio 后端 — Windows 生产环境停止（依据 backend_prod.pid）
 # 用法：
 #   powershell -NoProfile -ExecutionPolicy Bypass -File .\stop_prod_win.ps1
 
