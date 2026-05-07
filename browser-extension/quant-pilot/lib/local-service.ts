@@ -1,5 +1,3 @@
-import { EXTENSION_CLIENT_ID } from "./constants"
-
 export async function postJson(baseUrl: string, path: string, payload: unknown) {
   const res = await fetch(`${baseUrl.replace(/\/$/, "")}${path}`, {
     method: "POST",

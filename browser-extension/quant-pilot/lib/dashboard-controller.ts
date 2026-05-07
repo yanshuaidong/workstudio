@@ -426,7 +426,7 @@ function renderDashboard(d) {
 // Actions
 // --------------------------------------------------------------------------- //
 
-window.startManual = async function(taskKey) {
+async function startManual(taskKey) {
   try {
     const result = await postApi(`/tasks/${taskKey}/run-manual`, reportTradeDatePayload());
     addLocalLog(`已启动手动任务：${taskKey}，上报交易日 ${result.trade_date || "-"}`);
@@ -436,7 +436,7 @@ window.startManual = async function(taskKey) {
   }
 };
 
-window.retryToday = async function(runId) {
+async function retryToday(runId) {
   try {
     await postApi(`/runs/${runId}/retry-today`, {});
     addLocalLog("已创建重跑任务");
@@ -446,7 +446,7 @@ window.retryToday = async function(runId) {
   }
 };
 
-window.cancelRun = async function(runId) {
+async function cancelRun(runId) {
   try {
     await postApi(`/runs/${runId}/cancel`, {});
     addLocalLog("已取消任务");
@@ -456,7 +456,7 @@ window.cancelRun = async function(runId) {
   }
 };
 
-window.retryRemote = async function(runId) {
+async function retryRemote(runId) {
   try {
     await postApi(`/runs/${runId}/retry-remote`, reportTradeDatePayload());
     addLocalLog("已触发远端写入重试");
@@ -474,21 +474,8 @@ function addLocalLog(msg) {
   list.prepend(li);
 }
 
-function appendToolbarLog(msg) {
-  const log = $("log");
-  if (!log) return;
-  const li = document.createElement("li");
-  li.textContent = `${new Date().toLocaleTimeString()} ${msg}`;
-  log.prepend(li);
-}
-
 function isDashboardRunActive(run) {
   return Boolean(run && !["completed", "failed", "timeout", "cancelled", "not_started"].includes(run.status));
-}
-
-function activeDatasetKeyFromToolbar() {
-  const el = document.querySelector(".tab-button.active[data-dataset]");
-  return el?.getAttribute("data-dataset") || "stock_daily";
 }
 
 async function fetchExtensionSessionForDashboardRun(run) {

@@ -1,63 +1,34 @@
-"use strict";
+import {
+  COLLECTOR_PAGE,
+  COMMAND_POLL_INTERVAL_MS,
+  DEFAULT_LOCAL_SERVICE,
+  DEFAULT_PAGE_INTERVAL_MS,
+  EXTENSION_CLIENT_ID,
+  HEARTBEAT_INTERVAL_MS,
+  MIN_PAGE_INTERVAL_MS,
+  PAGE_RESPONSE_TIMEOUT_MS,
+  PAGE_RETRY_MAX
+} from "../lib/constants"
+import {
+  DATASETS,
+  captureMatchesDataset,
+  datasetConfig,
+  pageMatchesDataset
+} from "../lib/datasets"
+import { getJson, postJson } from "../lib/local-service"
+import { isQtClistUrl, parseQtClistResponse } from "../lib/qt-clist"
+import { blankSession, emptyPageInfo, publicSession } from "../lib/session"
 
-const TARGET_PATH = "/api/qt/clist/get";
-const DEFAULT_LOCAL_SERVICE = "http://127.0.0.1:17890";
-const DEFAULT_PAGE_INTERVAL_MS = 2500;
-const MIN_PAGE_INTERVAL_MS = 800;
-const EXTENSION_CLIENT_ID = "ws-ext-1";
-const HEARTBEAT_INTERVAL_MS = 30000;
-const COMMAND_POLL_INTERVAL_MS = 5000;
-
-const DATASETS = {
-  stock_daily: {
-    label: "股票日线数据",
-    source: "eastmoney_qt_clist",
-    pageUrl: "https://quote.eastmoney.com/center/gridlist.html#hs_a_board",
-    urlMatches(url) {
-      return url.searchParams.has("f152") || (url.searchParams.get("fields") || "").includes("f152");
-    }
-  },
-  stock_money_flow: {
-    label: "个股资金流数据",
-    source: "eastmoney_stock_money_flow",
-    pageUrl: "https://data.eastmoney.com/zjlx/detail.html",
-    urlMatches(url) {
-      const fields = url.searchParams.get("fields") || "";
-      return url.searchParams.get("fid") === "f62" || fields.includes("f62") || fields.includes("f184");
-    }
-  }
-};
-
-const sessions = new Map();
-const pageTimers = new Map();
-const networkRequests = new Map();
-
-const COLLECTOR_PAGE = "tabs/collector.html";
-const lastTargetTabIds = new Map();
-
-const PAGE_RESPONSE_TIMEOUT_MS = 15000; // ms to wait for API data after clicking next
-const PAGE_RETRY_MAX = 3;               // max re-clicks per page turn
-
-// tabId → { timer, expectedPn, retryCount }
-const pageResponseTimers = new Map();
-
-// Maps run_id → tabId for scheduler-opened tabs
-const runTabMap = new Map();
+const sessions = new Map()
+const pageTimers = new Map()
+const networkRequests = new Map()
+const lastTargetTabIds = new Map()
+const pageResponseTimers = new Map()
+const runTabMap = new Map()
 
 // --------------------------------------------------------------------------- //
 // Utilities
 // --------------------------------------------------------------------------- //
-
-function pageMatchesDataset(rawUrl, datasetKey) {
-  try {
-    const url = new URL(rawUrl || "");
-    const pageUrl = new URL(datasetConfig(datasetKey).pageUrl);
-    if (url.hostname !== pageUrl.hostname || url.pathname !== pageUrl.pathname) return false;
-    return pageUrl.hash ? url.hash.includes(pageUrl.hash.slice(1)) : true;
-  } catch {
-    return false;
-  }
-}
 
 function isCollectorPage(rawUrl) {
   try {
@@ -131,96 +102,9 @@ chrome.action.onClicked.addListener((tab) => {
 // Session management
 // --------------------------------------------------------------------------- //
 
-function blankSession(tabId, datasetKey = "stock_daily") {
-  return {
-    tabId, attached: false, datasetKey, status: "idle",
-    startedAt: null, lastError: "", lastCapture: null,
-    runId: null, submittedPages: {}, capturedPages: {}, capturedUrls: {},
-    rowsSeen: 0, rowsSubmitted: 0, autoRunning: false, debuggerAttached: false,
-    pageIntervalMs: DEFAULT_PAGE_INTERVAL_MS, lastJitterSeconds: null,
-    nextDelayMs: null, nextClickAt: null, lastScheduledPn: null,
-    serviceBaseUrl: DEFAULT_LOCAL_SERVICE
-  };
-}
-
 function getSession(tabId) {
   if (!sessions.has(tabId)) sessions.set(tabId, blankSession(tabId));
   return sessions.get(tabId);
-}
-
-function isQtClistUrl(rawUrl) {
-  try {
-    const url = new URL(rawUrl);
-    if (!url.pathname.includes(TARGET_PATH)) return false;
-    return ["fs", "fields", "pn", "pz"].every((key) => url.searchParams.has(key));
-  } catch { return false; }
-}
-
-function datasetConfig(datasetKey) {
-  return DATASETS[datasetKey] || DATASETS.stock_daily;
-}
-
-function captureMatchesDataset(rawUrl, datasetKey) {
-  try { return datasetConfig(datasetKey).urlMatches(new URL(rawUrl)); }
-  catch { return false; }
-}
-
-function parseJsonOrJsonp(body) {
-  const text = String(body || "").trim().replace(/^﻿/, "");
-  if (!text) throw new Error("Empty response body.");
-  if (text.startsWith("{")) return JSON.parse(text);
-  const firstBrace = text.indexOf("{");
-  const lastBrace = text.lastIndexOf("}");
-  if (firstBrace >= 0 && lastBrace > firstBrace) return JSON.parse(text.slice(firstBrace, lastBrace + 1));
-  throw new Error("Response is neither JSON nor JSONP.");
-}
-
-function parseQtClistResponse({ body, url, datasetKey }) {
-  const parsed = parseJsonOrJsonp(body);
-  if (!parsed || !parsed.data || !Array.isArray(parsed.data.diff)) {
-    throw new Error("Missing data.diff in qt/clist response.");
-  }
-  const requestUrl = new URL(url);
-  const rows = parsed.data.diff;
-  const dataset = datasetConfig(datasetKey);
-  return {
-    datasetKey, source: dataset.source, fetched_at: new Date().toISOString(), url,
-    pn: Number(requestUrl.searchParams.get("pn") || 0),
-    pz: Number(requestUrl.searchParams.get("pz") || rows.length || 0),
-    total: Number(parsed.data.total || 0),
-    f152: rows.length ? rows[0].f152 : undefined,
-    row_count: rows.length, rows
-  };
-}
-
-function publicSession(session) {
-  return {
-    tabId: session.tabId, attached: session.attached, status: session.status,
-    startedAt: session.startedAt, lastError: session.lastError,
-    datasetKey: session.datasetKey, datasetLabel: datasetConfig(session.datasetKey).label,
-    lastCapture: session.lastCapture ? {
-      fetched_at: session.lastCapture.fetched_at, url: session.lastCapture.url,
-      pn: session.lastCapture.pn, pz: session.lastCapture.pz,
-      total: session.lastCapture.total, f152: session.lastCapture.f152,
-      row_count: session.lastCapture.row_count
-    } : null,
-    runId: session.runId,
-    capturedPages: Object.keys(session.capturedPages).map(Number).sort((a, b) => a - b),
-    submittedPages: Object.keys(session.submittedPages).map(Number).sort((a, b) => a - b),
-    rowsSeen: session.rowsSeen, rowsSubmitted: session.rowsSubmitted,
-    autoRunning: session.autoRunning, pageIntervalMs: session.pageIntervalMs,
-    lastJitterSeconds: session.lastJitterSeconds, nextDelayMs: session.nextDelayMs,
-    nextClickAt: session.nextClickAt, lastScheduledPn: session.lastScheduledPn,
-    serviceBaseUrl: session.serviceBaseUrl
-  };
-}
-
-function emptyPageInfo(datasetKey, error = "") {
-  return {
-    ok: false, datasetKey, isTargetPage: false, hasPager: false,
-    currentPage: null, totalPages: null, canClickNext: false, url: "", error,
-    expectedUrl: datasetConfig(datasetKey).pageUrl
-  };
 }
 
 // --------------------------------------------------------------------------- //
@@ -253,29 +137,6 @@ function forgetNetworkRequests(tabId) {
   for (const [requestId, request] of networkRequests.entries()) {
     if (request.tabId === tabId) networkRequests.delete(requestId);
   }
-}
-
-// --------------------------------------------------------------------------- //
-// HTTP helpers
-// --------------------------------------------------------------------------- //
-
-async function postJson(baseUrl, path, payload) {
-  const res = await fetch(`${baseUrl.replace(/\/$/, "")}${path}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload)
-  });
-  const text = await res.text();
-  let body = null;
-  try { body = text ? JSON.parse(text) : null; } catch { body = { raw: text }; }
-  if (!res.ok || body?.ok === false) throw new Error(body?.error || `HTTP ${res.status}`);
-  return body;
-}
-
-async function getJson(baseUrl, path) {
-  const res = await fetch(`${baseUrl.replace(/\/$/, "")}${path}`);
-  const text = await res.text();
-  return text ? JSON.parse(text) : null;
 }
 
 // --------------------------------------------------------------------------- //
@@ -853,7 +714,7 @@ async function testLocalService(baseUrl) {
 }
 
 // --------------------------------------------------------------------------- //
-// Message handler (from popup.js / content.js)
+// Message handler
 // --------------------------------------------------------------------------- //
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {

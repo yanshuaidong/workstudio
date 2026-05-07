@@ -1,47 +1,76 @@
+# ------------------------------------------------------------------------------
 # Dependencies
+# ------------------------------------------------------------------------------
 node_modules/
 vendor/
 
+# ------------------------------------------------------------------------------
 # Python
+# ------------------------------------------------------------------------------
 __pycache__/
 *.py[cod]
 .venv/
 venv/
 *.egg-info/
 .eggs/
+.mypy_cache/
+.pytest_cache/
+htmlcov/
+.coverage
+coverage.xml
 
-# Env & secrets
+# ------------------------------------------------------------------------------
+# Environment & secrets
+# ------------------------------------------------------------------------------
 .env
 .env.*
 !.env.example
 
-# Build outputs
+# ------------------------------------------------------------------------------
+# Build & release outputs
+# ------------------------------------------------------------------------------
 dist/
 build/
 out/
 *.local
 
-# Logs & caches
+# ------------------------------------------------------------------------------
+# Logs & runtime
+# ------------------------------------------------------------------------------
 *.log
 backend/backend_prod.pid
+
+# ------------------------------------------------------------------------------
+# Tool / bundler caches (Plasmo / Parcel / Turborepo / Vite 等)
+# ------------------------------------------------------------------------------
 .cache/
 .parcel-cache/
+.plasmo/
 .turbo/
+.vite/
+*.tsbuildinfo
+.eslintcache
+coverage/
+.nyc_output/
 
+# Parcel / LMDB 等可能产生的本地数据库文件
+*.mdb
+
+# ------------------------------------------------------------------------------
 # IDE / OS
+# ------------------------------------------------------------------------------
 .idea/
 .vscode/
 *.swp
 .DS_Store
 Thumbs.db
 
-# Local DB dumps / binaries (adjust if you version schema-only files)
+# ------------------------------------------------------------------------------
+# Local database binaries (仅忽略 data 文件；如需版本化 schema 请用迁移/SQL)
+# ------------------------------------------------------------------------------
 database/*.db
 database/*.sqlite
 database/*.sqlite3
-database/*.sqlite-shm
-database/*.sqlite-wal
-database/*.sqlite-journal
 database/*.sqlite-shm
 database/*.sqlite-wal
 database/*.sqlite-journal
