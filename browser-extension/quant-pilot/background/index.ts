@@ -825,19 +825,27 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             }
           } catch { /* ignore navigation error */ }
 
-          // 把分页器对齐到上次截获的页码，再进入调度循环
+          // 把分页器对齐到上次截获的页码，再进入调度循环（须确认 ok，否则勿点「下一页」）
           try {
             session.status = "syncing_pager";
             await publishStatus(tabId);
-            await sendToContent(tabId, {
-              type: "GO_TO_PAGE",
-              datasetKey: session.datasetKey,
-              targetPn: session.lastCapture.pn,
-              options: { maxSteps: 300, settleMs: 500 }
-            });
+            try {
+              await syncPagerBeforeNextPage(tabId, session.lastCapture, session.datasetKey);
+            } catch (e1) {
+              await new Promise((r) => setTimeout(r, 1500));
+              await syncPagerBeforeNextPage(tabId, session.lastCapture, session.datasetKey);
+            }
           } catch (syncErr) {
-            // 对齐失败不阻断：scheduleNextPage 内部仍会再次尝试
-            session.lastError = `初始对齐失败(${syncErr.message})，仍将尝试继续`;
+            session.lastError = `继续后分页对齐失败：${syncErr.message || syncErr}`;
+            session.autoRunning = false;
+            session.status = "pager_sync_error";
+            await publishStatus(tabId);
+            sendResponse({
+              ok: false,
+              error: session.lastError,
+              session: publicSession(session)
+            });
+            return;
           }
 
           session.status = "auto_listening";

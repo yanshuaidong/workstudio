@@ -104,21 +104,63 @@ function findGotoFormElements(datasetKey) {
   }
   if (!form || !input) return { form: null, input: null, submit: null };
   const submit =
-    form.querySelector("input[type='submit'], button[type='submit'], input.btn[type='submit']") ||
-    null;
+    form.querySelector(
+      "input[type='submit'], button[type='submit'], input.btn[type='submit'], button:not([type])"
+    ) || null;
   return { form, input, submit };
+}
+
+/**
+ * 东财分页「转到」框多为前端受控：直接赋 value + Event often 不落库，
+ * 需走原生 setter，并派发 InputEvent，与页面控制台脚本行为一致。
+ */
+function commitControlledInputText(input: HTMLInputElement, text: string) {
+  const val = String(text);
+  const desc = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value");
+  try {
+    if (desc?.set) desc.set.call(input, val);
+    else input.value = val;
+  } catch {
+    input.value = val;
+  }
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  input.dispatchEvent(new Event("change", { bubbles: true }));
+  try {
+    input.dispatchEvent(
+      new InputEvent("input", {
+        bubbles: true,
+        cancelable: true,
+        inputType: "insertReplacementText",
+        data: val
+      })
+    );
+  } catch {
+    /* 旧 Chromium 可能没有 InputEvent 构造预期 */
+  }
+}
+
+async function waitUntilActiveEquals(
+  datasetKey: string,
+  targetPn: number,
+  timeoutMs: number,
+  pollMs = 120
+) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (getActivePage(datasetKey) === targetPn) return true;
+    await sleep(pollMs);
+  }
+  return false;
 }
 
 /**
  * 使用站点「跳转到」表单直达目标页（当前可见条里点不到时）。
  */
-async function submitGotoPageForm(datasetKey, targetPn, settleMs) {
+async function submitGotoPageForm(datasetKey: string, targetPn: number, settleMs: number) {
   const { form, input, submit } = findGotoFormElements(datasetKey);
   if (!form || !input) return { ok: false, error: "Goto form not found." };
-  input.focus();
-  input.value = String(targetPn);
-  input.dispatchEvent(new Event("input", { bubbles: true }));
-  input.dispatchEvent(new Event("change", { bubbles: true }));
+  input.focus({ preventScroll: true });
+  commitControlledInputText(input as HTMLInputElement, String(targetPn));
   if (submit) {
     dispatchMouse(submit, "mouseover");
     dispatchMouse(submit, "mousedown");
@@ -127,8 +169,10 @@ async function submitGotoPageForm(datasetKey, targetPn, settleMs) {
   } else {
     form.requestSubmit?.();
   }
-  await sleep(Math.max(settleMs, 400));
-  return { ok: true };
+  const pollTimeout = Math.max(4200, settleMs + 3500);
+  const okPoll = await waitUntilActiveEquals(datasetKey, targetPn, pollTimeout);
+  if (!okPoll) await sleep(Math.max(settleMs, 200));
+  return okPoll ? { ok: true } : { ok: false, error: "Goto form submitted but pager did not reach target." };
 }
 
 function getActivePage(datasetKey = "stock_daily") {
