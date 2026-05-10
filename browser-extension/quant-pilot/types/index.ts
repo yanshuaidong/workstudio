@@ -42,6 +42,7 @@ export type PageCapture = {
 // In-memory state for an active collection run (one per dataset at most)
 export type CollectorSession = {
   tabId: number | null
+  autoOpened: boolean          // true = background opened this tab; close it when done/failed
   datasetKey: DatasetKey
   tradeDate: string
   status: CollectionStatus

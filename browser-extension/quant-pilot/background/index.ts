@@ -208,6 +208,42 @@ async function findTargetTab(key: DatasetKey): Promise<chrome.tabs.Tab | null> {
   }) ?? null
 }
 
+// Open a new tab and wait until it reaches "complete" status, then settle briefly
+async function openAndWaitForTab(url: string): Promise<chrome.tabs.Tab> {
+  return new Promise<chrome.tabs.Tab>((resolve, reject) => {
+    let createdTabId: number | null = null
+
+    const listener = (tabId: number, info: chrome.tabs.TabChangeInfo, tab: chrome.tabs.Tab) => {
+      if (tabId !== createdTabId) return
+      if (info.status === "complete") {
+        chrome.tabs.onUpdated.removeListener(listener)
+        // Brief settle so content scripts finish registering their message listeners
+        setTimeout(() => resolve(tab), 1500)
+      }
+    }
+
+    chrome.tabs.onUpdated.addListener(listener)
+
+    chrome.tabs.create({ url, active: false }).then((t) => {
+      createdTabId = t.id ?? null
+      if (t.status === "complete") {
+        chrome.tabs.onUpdated.removeListener(listener)
+        setTimeout(() => resolve(t), 1500)
+      }
+    }).catch((e) => {
+      chrome.tabs.onUpdated.removeListener(listener)
+      reject(e)
+    })
+  })
+}
+
+// Close a tab that was auto-opened by this extension (no-op for manual sessions)
+async function maybeCloseAutoTab(key: DatasetKey): Promise<void> {
+  const session = sessions.get(key)
+  if (!session?.autoOpened || !session.tabId) return
+  try { await chrome.tabs.remove(session.tabId) } catch {}
+}
+
 async function sendToContentScript(tabId: number, message: Record<string, unknown>): Promise<unknown> {
   try {
     return await chrome.tabs.sendMessage(tabId, message)
@@ -223,6 +259,7 @@ async function sendToContentScript(tabId: number, message: Record<string, unknow
 function blankSession(key: DatasetKey, tradeDate: string, startPage: number, localRowCountAtStart: number): CollectorSession {
   return {
     tabId: null,
+    autoOpened: false,
     datasetKey: key,
     tradeDate,
     status: "idle",
@@ -353,6 +390,7 @@ function armPageResponseTimer(key: DatasetKey, expectedPn: number, retryCount: n
       session.status = "risk_control"
       session.riskControlDetected = true
       session.lastError = `第 ${expectedPn} 页连续 ${PAGE_RETRY_MAX} 次超时，疑似触发风控`
+      maybeCloseAutoTab(key).catch(() => {})
     }
     return
   }
@@ -379,6 +417,7 @@ function armPageResponseTimer(key: DatasetKey, expectedPn: number, retryCount: n
         session.riskControlDetected = true
         session.status = "risk_control"
         session.lastError = result?.error ?? "翻页失败（疑似风控）"
+        maybeCloseAutoTab(key).catch(() => {})
         return
       }
       session.status = "waiting_data"
@@ -386,6 +425,7 @@ function armPageResponseTimer(key: DatasetKey, expectedPn: number, retryCount: n
     } catch (e) {
       session.status = "error"
       session.lastError = (e as Error).message
+      maybeCloseAutoTab(key).catch(() => {})
     }
   }, PAGE_RESPONSE_TIMEOUT_MS)
 
@@ -421,6 +461,7 @@ function scheduleNextPageClick(key: DatasetKey) {
     if (!tabId || !(await tabExists(tabId))) {
       s.status = "error"
       s.lastError = "目标标签页已关闭"
+      // Tab is already gone; no need to close it
       return
     }
 
@@ -440,6 +481,7 @@ function scheduleNextPageClick(key: DatasetKey) {
         s.riskControlDetected = true
         s.status = "risk_control"
         s.lastError = result?.error ?? "翻页失败（疑似风控）"
+        maybeCloseAutoTab(key).catch(() => {})
         return
       }
       s.status = "waiting_data"
@@ -447,6 +489,7 @@ function scheduleNextPageClick(key: DatasetKey) {
     } catch (e) {
       s.status = "error"
       s.lastError = (e as Error).message
+      maybeCloseAutoTab(key).catch(() => {})
     }
   }, delayMs)
 
@@ -481,6 +524,7 @@ async function processCapture(key: DatasetKey, capture: PageCapture): Promise<vo
   } catch (e) {
     session.status = "error"
     session.lastError = `写入本地失败（第 ${capture.pageNumber} 页）：${(e as Error).message}`
+    maybeCloseAutoTab(key).catch(() => {})
     return
   }
 
@@ -513,7 +557,7 @@ function markCompleted(key: DatasetKey) {
   if (!session) return
   session.status = "completed"
   const tradeDate = session.tradeDate
-  // Kick off sync automatically
+  maybeCloseAutoTab(key).catch(() => {})
   triggerSync(key, tradeDate).catch(() => {})
 }
 
@@ -643,7 +687,7 @@ async function runAutoCollect(key: DatasetKey): Promise<void> {
   }
 
   if (!sessions.has(key)) {
-    await startCollection(key, effectiveReportTradeDate())
+    await startCollection(key, effectiveReportTradeDate(), true)
   }
 
   rescheduleAutoCollectAlarm(key)
@@ -653,8 +697,8 @@ async function runAutoCollect(key: DatasetKey): Promise<void> {
 // Start / stop collection
 // ---------------------------------------------------------------------------
 
-async function startCollection(key: DatasetKey, tradeDate: string): Promise<void> {
-  // Stop any running session for this dataset
+async function startCollection(key: DatasetKey, tradeDate: string, autoTriggered = false): Promise<void> {
+  // Stop any running session for this dataset (closes its auto-opened tab if any)
   stopCollection(key)
 
   // Check local DB
@@ -668,13 +712,32 @@ async function startCollection(key: DatasetKey, tradeDate: string): Promise<void
   const startPage = Math.floor(localCount / DEFAULT_PAGE_SIZE) + 1
 
   const session = blankSession(key, tradeDate, startPage, localCount)
+  session.autoOpened = autoTriggered
   sessions.set(key, session)
   capturedUrlKeys.set(key, new Set())
 
-  const tab = await findTargetTab(key)
+  // Auto mode: open a fresh tab; manual mode: find an existing tab
+  let tab: chrome.tabs.Tab | null = null
+  if (autoTriggered) {
+    try {
+      tab = await openAndWaitForTab(DATASETS[key].pageUrl)
+    } catch (e) {
+      session.status = "error"
+      session.lastError = `无法打开目标页面：${(e as Error).message}`
+      return
+    }
+  } else {
+    tab = await findTargetTab(key)
+    if (!tab?.id) {
+      session.status = "error"
+      session.lastError = `请先打开目标页面：${DATASETS[key].pageUrl}`
+      return
+    }
+  }
+
   if (!tab?.id) {
     session.status = "error"
-    session.lastError = `请先打开目标页面：${DATASETS[key].pageUrl}`
+    session.lastError = `无法获取目标标签页`
     return
   }
 
@@ -687,6 +750,7 @@ async function startCollection(key: DatasetKey, tradeDate: string): Promise<void
   } catch (e) {
     session.status = "error"
     session.lastError = `无法附加调试器：${(e as Error).message}`
+    maybeCloseAutoTab(key).catch(() => {})
     return
   }
 
@@ -719,13 +783,17 @@ async function startCollection(key: DatasetKey, tradeDate: string): Promise<void
   } catch (e) {
     session.status = "error"
     session.lastError = (e as Error).message
+    maybeCloseAutoTab(key).catch(() => {})
   }
 }
 
 function stopCollection(key: DatasetKey): void {
   clearAllTimers(key)
   const session = sessions.get(key)
-  if (session?.tabId) detachDebugger(session.tabId).catch(() => {})
+  if (session?.tabId) {
+    detachDebugger(session.tabId).catch(() => {})
+    if (session.autoOpened) chrome.tabs.remove(session.tabId).catch(() => {})
+  }
   sessions.delete(key)
   capturedUrlKeys.delete(key)
 }
@@ -793,6 +861,7 @@ async function handleQtClistResponse(key: DatasetKey, url: string, body: string)
     session.status = "risk_control"
     session.lastError = "API 未返回有效数据（疑似风控）"
     clearAllTimers(key)
+    maybeCloseAutoTab(key).catch(() => {})
     return
   }
 
