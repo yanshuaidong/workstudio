@@ -32,6 +32,8 @@
     },
     "permissions": [
       "activeTab",
+      "alarms",
+      "debugger",
       "scripting",
       "storage",
       "tabs",
