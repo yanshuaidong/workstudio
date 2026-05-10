@@ -1,5 +1,13 @@
 import dayjs, { type Dayjs } from "dayjs"
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { datasetConfig } from "./datasets"
+import {
+  loadCollectorStored,
+  resetTaskRunSlot,
+  saveCollectorStored,
+  updateTaskRunInStorage,
+} from "./collector-local-storage"
+import { newRunId } from "./run-id"
 
 // ---------------------------------------------------------------------------
 // Types
@@ -46,6 +54,16 @@ export type Dashboard = {
   task_runs?: TaskRun[]
   alerts?: DashboardAlert[]
   recent_events?: DashboardEvent[]
+}
+
+type HealthJson = {
+  ok?: boolean
+  version?: string
+  remote_db_ok?: boolean
+  is_trading_day?: boolean | null
+  trading_day_source?: string
+  time?: string
+  data_layer_only?: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -231,6 +249,8 @@ export function useCollectorDashboard() {
   const [extAutoRunning, setExtAutoRunning] = useState<boolean | null>(null)
   const [overviewError, setOverviewError] = useState<string | null>(null)
   const [uiLogExtras, setUiLogExtras] = useState<DashboardEvent[]>([])
+  /** 与 /health.data_layer_only 对齐；回调里用 ref 避免陈旧闭包 */
+  const serverDataLayerRef = useRef(true)
 
   const base = useMemo(() => serviceBaseUrl.replace(/\/$/, ""), [serviceBaseUrl])
 
@@ -242,7 +262,7 @@ export function useCollectorDashboard() {
 
   const fetchHealth = useCallback(async () => {
     const res = await fetch(`${base}/health`, { signal: AbortSignal.timeout(4000) })
-    return (await res.json()) as { ok?: boolean; version?: string; remote_db_ok?: boolean }
+    return (await res.json()) as HealthJson
   }, [base])
 
   const postApi = useCallback(
@@ -314,10 +334,96 @@ export function useCollectorDashboard() {
 
   const refresh = useCallback(async () => {
     try {
-      const d = await fetchDashboardJson()
-      setDashboard(d)
+      const hres = await fetch(`${base}/health`, { signal: AbortSignal.timeout(5000) })
+      const health = (await hres.json()) as HealthJson
+      if (!hres.ok) throw new Error(String(hres.status))
       setSvcOnline(true)
       setOverviewError(null)
+      const dataLayer = health.data_layer_only === true
+      serverDataLayerRef.current = dataLayer
+
+      if (dataLayer) {
+        const stored = await loadCollectorStored()
+        const today =
+          typeof health.time === "string" && health.time.length >= 10
+            ? health.time.slice(0, 10)
+            : dayjs().format("YYYY-MM-DD")
+        const task_runs: TaskRun[] = await Promise.all(
+          (stored.task_runs || []).map(async (tr) => {
+            const withUrl = {
+              ...tr,
+              target_url: tr.target_url || datasetConfig(tr.task_key).pageUrl,
+            }
+            if (!tr.run_id) return withUrl
+            try {
+              const sres = await fetch(`${base}/runs/${encodeURIComponent(tr.run_id)}/summary`, {
+                signal: AbortSignal.timeout(4000),
+              })
+              if (!sres.ok) return withUrl
+              const data = (await sres.json()) as {
+                run?: {
+                  pages_done?: number
+                  rows_done?: number
+                  total_pages?: number | null
+                  total_rows?: number | null
+                }
+              }
+              const run = data.run as
+                | {
+                    pages_done?: number
+                    rows_done?: number
+                    total_pages?: number | null
+                    total_rows?: number | null
+                    status?: string
+                  }
+                | undefined
+              let status = tr.status
+              if (run?.status === "completed") status = "completed"
+              else if (run?.status === "failed") status = "failed"
+              return {
+                ...withUrl,
+                status,
+                pages_received: run?.pages_done ?? tr.pages_received,
+                rows_received: run?.rows_done ?? tr.rows_received,
+                expected_pages:
+                  run?.total_pages != null ? run.total_pages : tr.expected_pages,
+              }
+            } catch {
+              return withUrl
+            }
+          })
+        )
+        const active =
+          task_runs.find(
+            (r) =>
+              r.run_id &&
+              !["not_started", "completed", "failed", "timeout", "cancelled"].includes(r.status)
+          ) || null
+        const d: Dashboard = {
+          today,
+          is_trading_day: health.is_trading_day,
+          run_mode: stored.run_mode,
+          schedule: {
+            status: "idle",
+            run_mode: stored.run_mode,
+            auto_start_at: null,
+          },
+          report_trade_date: stored.report_trade_date || today,
+          report_trade_date_source: "extension",
+          current_run: active,
+          task_runs,
+          alerts: [],
+          recent_events: [],
+        }
+        setDashboard(d)
+        queueMicrotask(() => {
+          syncExtAuto(d).catch(() => {})
+        })
+        return
+      }
+
+      const d = await fetchDashboardJson()
+      setDashboard(d)
       queueMicrotask(() => {
         syncExtAuto(d).catch(() => {})
       })
@@ -325,7 +431,7 @@ export function useCollectorDashboard() {
       setSvcOnline(false)
       setOverviewError("本地服务不可用，请检查是否已启动 winrun.cmd")
     }
-  }, [fetchDashboardJson, syncExtAuto])
+  }, [base, fetchDashboardJson, syncExtAuto])
 
   useEffect(() => {
     void refresh()
@@ -368,6 +474,12 @@ export function useCollectorDashboard() {
   const setRunMode = useCallback(
     async (mode: string) => {
       try {
+        if (serverDataLayerRef.current) {
+          const cur = await loadCollectorStored()
+          await saveCollectorStored({ ...cur, run_mode: mode === "auto" ? "auto" : "manual" })
+          await refresh()
+          return
+        }
         await patchApi("/schedule/today/mode", { mode })
         await refresh()
       } catch (e) {
@@ -378,17 +490,58 @@ export function useCollectorDashboard() {
   )
 
   const resetReportDate = useCallback(() => {
-    setReportDateTouched(false)
-    const d = dashboard
-    if (!d) return
-    const defaultDate = d.report_trade_date || d.today
-    if (defaultDate) setReportDate(dayjs(defaultDate))
-    else setReportDate(null)
-  }, [dashboard])
+    void (async () => {
+      setReportDateTouched(false)
+      if (serverDataLayerRef.current) {
+        const cur = await loadCollectorStored()
+        await saveCollectorStored({ ...cur, report_trade_date: null })
+        await refresh()
+        return
+      }
+      const d = dashboard
+      if (!d) return
+      const defaultDate = d.report_trade_date || d.today
+      if (defaultDate) setReportDate(dayjs(defaultDate))
+      else setReportDate(null)
+    })()
+  }, [dashboard, refresh])
 
   const startManual = useCallback(
     async (taskKey: string) => {
       try {
+        if (serverDataLayerRef.current) {
+          const payload = reportTradeDatePayload()
+          const runId = newRunId()
+          const dk = taskKey === "stock_money_flow" ? "stock_money_flow" : "stock_daily"
+          const cfg = datasetConfig(dk)
+          await postApi("/runs", {
+            run_id: runId,
+            source: cfg.source,
+            page_url: cfg.pageUrl,
+          })
+          await chrome.runtime.sendMessage({
+            type: "START_DATA_LAYER_TASK",
+            runId,
+            taskKey,
+            tradeDate: payload.trade_date || null,
+            serviceBaseUrl: base,
+          })
+          const tradeDateStr = payload.trade_date as string | undefined
+          await updateTaskRunInStorage(taskKey, {
+            run_id: runId,
+            status: "capturing",
+            trade_date: tradeDateStr,
+            target_url: cfg.pageUrl,
+            started_at: new Date().toISOString(),
+          })
+          if (tradeDateStr) {
+            const cur = await loadCollectorStored()
+            await saveCollectorStored({ ...cur, report_trade_date: tradeDateStr })
+          }
+          addLocalLog(`已启动：${taskKey}，run ${runId}，上报日 ${tradeDateStr || "-"}`)
+          await refresh()
+          return
+        }
         const result = await postApi(`/tasks/${taskKey}/run-manual`, reportTradeDatePayload())
         addLocalLog(`已启动手动任务：${taskKey}，上报交易日 ${result.trade_date || "-"}`)
         await refresh()
@@ -396,12 +549,41 @@ export function useCollectorDashboard() {
         addLocalLog("启动失败：" + (e instanceof Error ? e.message : String(e)))
       }
     },
-    [postApi, reportTradeDatePayload, addLocalLog, refresh]
+    [postApi, reportTradeDatePayload, addLocalLog, refresh, base]
   )
 
   const retryToday = useCallback(
     async (runId: string) => {
       try {
+        if (serverDataLayerRef.current) {
+          const tk = dashboard?.task_runs?.find((r) => r.run_id === runId)?.task_key
+          if (tk) {
+            await resetTaskRunSlot(tk)
+            const payload = reportTradeDatePayload()
+            const rid = newRunId()
+            const dk = tk === "stock_money_flow" ? "stock_money_flow" : "stock_daily"
+            const cfg = datasetConfig(dk)
+            await postApi("/runs", { run_id: rid, source: cfg.source, page_url: cfg.pageUrl })
+            await chrome.runtime.sendMessage({
+              type: "START_DATA_LAYER_TASK",
+              runId: rid,
+              taskKey: tk,
+              tradeDate: payload.trade_date || null,
+              serviceBaseUrl: base,
+            })
+            const tradeDateStr = payload.trade_date as string | undefined
+            await updateTaskRunInStorage(tk, {
+              run_id: rid,
+              status: "capturing",
+              trade_date: tradeDateStr,
+              target_url: cfg.pageUrl,
+              started_at: new Date().toISOString(),
+            })
+            addLocalLog(`已重跑：${tk}，run ${rid}`)
+            await refresh()
+          }
+          return
+        }
         await postApi(`/runs/${runId}/retry-today`, {})
         addLocalLog("已创建重跑任务")
         await refresh()
@@ -409,12 +591,23 @@ export function useCollectorDashboard() {
         addLocalLog("重跑失败：" + (e instanceof Error ? e.message : String(e)))
       }
     },
-    [postApi, addLocalLog, refresh]
+    [postApi, addLocalLog, refresh, dashboard?.task_runs, reportTradeDatePayload, base]
   )
 
   const cancelRun = useCallback(
     async (runId: string) => {
       try {
+        if (serverDataLayerRef.current) {
+          await chrome.runtime
+            .sendMessage({ type: "CANCEL_DATA_LAYER_RUN", runId })
+            .catch(() => {})
+          await postApi(`/runs/${runId}/cancel`, {}).catch(() => {})
+          const tk = dashboard?.task_runs?.find((r) => r.run_id === runId)?.task_key
+          if (tk) await resetTaskRunSlot(tk)
+          addLocalLog("已取消任务")
+          await refresh()
+          return
+        }
         await postApi(`/runs/${runId}/cancel`, {})
         addLocalLog("已取消任务")
         await refresh()
@@ -422,7 +615,7 @@ export function useCollectorDashboard() {
         addLocalLog("取消失败：" + (e instanceof Error ? e.message : String(e)))
       }
     },
-    [postApi, addLocalLog, refresh]
+    [postApi, addLocalLog, refresh, dashboard?.task_runs]
   )
 
   const retryRemote = useCallback(
@@ -510,6 +703,10 @@ export function useCollectorDashboard() {
 
   const reportDateNote = useMemo(() => {
     if (!dashboard) return "-"
+    if (dashboard.report_trade_date_source === "extension") {
+      const d = dashboard.report_trade_date || dashboard.today || ""
+      return d ? `扩展存储默认 ${d}；手动启动写入 finish 时带给后端` : "在扩展中维护上报交易日"
+    }
     const defaultDate = dashboard.report_trade_date || dashboard.today || ""
     const source = dashboard.report_trade_date_source ? ` / ${dashboard.report_trade_date_source}` : ""
     return defaultDate

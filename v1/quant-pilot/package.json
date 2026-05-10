@@ -1,0 +1,51 @@
+{
+    "name": "quant-pilot",
+    "displayName": "Quant Pilot",
+    "version": "0.1.0",
+    "description": "东方财富数据采集控制台",
+    "scripts": {
+        "dev": "plasmo dev",
+        "build": "plasmo build && node patch-manifest.cjs",
+        "package": "plasmo package"
+    },
+    "dependencies": {
+        "@plasmohq/messaging": "latest",
+        "antd": "^6.3.7",
+        "plasmo": "latest",
+        "react": "18.2.0",
+        "react-dom": "18.2.0"
+    },
+    "devDependencies": {
+        "@types/chrome": "latest",
+        "@types/node": "latest",
+        "@types/react": "18.2.79",
+        "@types/react-dom": "18.2.25",
+        "typescript": "latest"
+    },
+    "manifest": {
+        "manifest_version": 3,
+        "name": "Quant Pilot",
+        "description": "东方财富数据采集控制台",
+        "action": {
+            "default_title": "打开 Quant Pilot 采集控制台"
+        },
+        "permissions": [
+            "activeTab",
+            "debugger",
+            "scripting",
+            "storage",
+            "tabs",
+            "windows"
+        ],
+        "host_permissions": [
+            "https://quote.eastmoney.com/*",
+            "https://data.eastmoney.com/*",
+            "https://push2.eastmoney.com/*",
+            "https://push2delay.eastmoney.com/*",
+            "http://127.0.0.1:17890/*"
+        ]
+    },
+    "browserslist": [
+        "Chrome >= 114"
+    ]
+}

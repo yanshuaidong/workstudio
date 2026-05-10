@@ -1,10 +1,2 @@
-export const TARGET_PATH = "/api/qt/clist/get"
-export const DEFAULT_LOCAL_SERVICE = "http://127.0.0.1:17890"
-export const DEFAULT_PAGE_INTERVAL_MS = 2500
-export const MIN_PAGE_INTERVAL_MS = 800
-export const EXTENSION_CLIENT_ID = "ws-ext-1"
-export const HEARTBEAT_INTERVAL_MS = 30000
-export const COMMAND_POLL_INTERVAL_MS = 5000
-export const COLLECTOR_PAGE = "tabs/collector.html"
-export const PAGE_RESPONSE_TIMEOUT_MS = 15000
-export const PAGE_RETRY_MAX = 3
+/** 与本机 backend 对齐的默认原点；可在后续改为 plasmo 环境变量。 */
+export const DEFAULT_BACKEND_ORIGIN = "http://127.0.0.1:17890";

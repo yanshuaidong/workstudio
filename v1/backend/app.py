@@ -28,12 +28,23 @@ configure_logging()
 
 import db_local as db
 import scheduler as sched
+import tasks_def as tasks_def_mod
 from db_remote import test_connection as _test_remote
 from trading_calendar import is_trading_day, today_is_trading_day
 
 
 _LOG_HTTP = logging.getLogger("workstudio.http")
 _ACCESS_STATUS_RE = re.compile(r'" (\d{3}) ')
+
+
+def _control_plane_denied(handler: "ApiHandler") -> bool:
+    if not _cfg.DATA_LAYER_ONLY:
+        return False
+    handler.write_json(404, {
+        "ok": False,
+        "error": "控制与看板由浏览器扩展负责；本服务仅保留 health、trading-calendar、runs 数据链路与远端同步。",
+    })
+    return True
 
 
 def _status_from_access_message(msg: str) -> int | None:
@@ -157,16 +168,21 @@ class ApiHandler(BaseHTTPRequestHandler):
                 "trading_day_source": td_src,
                 "version": _cfg.VERSION,
                 "time": db.now_iso(),
+                "data_layer_only": _cfg.DATA_LAYER_ONLY,
             })
             return
 
         # GET /tasks
         if parts == ["tasks"]:
+            if _control_plane_denied(self):
+                return
             self.write_json(200, {"ok": True, "tasks": db.get_tasks(self.db_path)})
             return
 
         # GET /schedule/today
         if parts == ["schedule", "today"]:
+            if _control_plane_denied(self):
+                return
             today = db.today_str()
             td, td_src = today_is_trading_day(self.db_path)
             schedule = db.get_or_create_schedule(self.db_path, today, int(td))
@@ -175,6 +191,8 @@ class ApiHandler(BaseHTTPRequestHandler):
 
         # GET /dashboard/today
         if parts == ["dashboard", "today"]:
+            if _control_plane_denied(self):
+                return
             today = db.today_str()
             td, _ = today_is_trading_day(self.db_path)
             db.get_or_create_schedule(self.db_path, today, int(td))
@@ -195,6 +213,8 @@ class ApiHandler(BaseHTTPRequestHandler):
 
         # GET /task-runs/{id}
         if len(parts) == 2 and parts[0] == "task-runs":
+            if _control_plane_denied(self):
+                return
             tr = db.get_task_run(self.db_path, parts[1])
             if not tr:
                 raise KeyError(parts[1])
@@ -206,6 +226,8 @@ class ApiHandler(BaseHTTPRequestHandler):
 
         # GET /extension/commands
         if parts == ["extension", "commands"]:
+            if _control_plane_denied(self):
+                return
             client_id = qs.get("client_id", [""])[0] or "default"
             cmds = db.claim_commands(self.db_path, client_id)
             result = []
@@ -255,15 +277,30 @@ class ApiHandler(BaseHTTPRequestHandler):
         # POST /runs/{id}/finish  (compat)
         if len(parts) == 3 and parts[0] == "runs" and parts[2] == "finish":
             result = db.finish_run_compat(self.db_path, parts[1], payload)
-            # Check if this run is local_collected → trigger remote write
-            tr = db.get_task_run(self.db_path, parts[1])
-            if tr and tr["status"] == "local_collected":
-                sched._trigger_remote_write(tr, self.db_path)
+            if _cfg.DATA_LAYER_ONLY:
+                if result.get("status") == "completed":
+                    row = db.get_compat_run(self.db_path, parts[1])
+                    tk = tasks_def_mod.task_key_for_source(row.get("source") if row else None)
+                    if tk:
+                        sched._trigger_remote_write({
+                            "run_id": parts[1],
+                            "task_key": tk,
+                            "trade_date": payload.get("trade_date"),
+                            "schedule_date": db.today_str(),
+                            "mode": "manual",
+                        }, self.db_path)
+            else:
+                tr = db.get_task_run(self.db_path, parts[1])
+                if tr and tr["status"] == "local_collected":
+                    sched._trigger_remote_write(tr, self.db_path)
             self.write_json(200, result)
             return
 
         # POST /runs/{id}/cancel
         if len(parts) == 3 and parts[0] == "runs" and parts[2] == "cancel":
+            if _cfg.DATA_LAYER_ONLY:
+                self.write_json(200, {"ok": True, "run_id": parts[1], "status": "cancelled"})
+                return
             tr = db.get_task_run(self.db_path, parts[1])
             if tr:
                 db.finish_task_run(self.db_path, parts[1], "cancelled")
@@ -291,12 +328,16 @@ class ApiHandler(BaseHTTPRequestHandler):
 
         # POST /runs/{id}/retry-today
         if len(parts) == 3 and parts[0] == "runs" and parts[2] == "retry-today":
+            if _control_plane_denied(self):
+                return
             result = sched.retry_today(parts[1], self.db_path)
             self.write_json(200, {"ok": True, **result})
             return
 
         # POST /tasks/{task_key}/run-manual
         if len(parts) == 3 and parts[0] == "tasks" and parts[2] == "run-manual":
+            if _control_plane_denied(self):
+                return
             result = sched.start_manual_task(
                 parts[1],
                 self.db_path,
@@ -307,6 +348,8 @@ class ApiHandler(BaseHTTPRequestHandler):
 
         # POST /schedule/today/start
         if parts == ["schedule", "today", "start"]:
+            if _control_plane_denied(self):
+                return
             today = db.today_str()
             schedule = db.get_or_create_schedule(self.db_path, today)
             if schedule["run_mode"] != "auto":
@@ -323,6 +366,8 @@ class ApiHandler(BaseHTTPRequestHandler):
 
         # POST /schedule/today/stop
         if parts == ["schedule", "today", "stop"]:
+            if _control_plane_denied(self):
+                return
             today = db.today_str()
             db.update_schedule_status(self.db_path, today, "stopped")
             active = db.get_active_task_run(self.db_path)
@@ -336,12 +381,16 @@ class ApiHandler(BaseHTTPRequestHandler):
 
         # POST /extension/events
         if parts == ["extension", "events"]:
+            if _control_plane_denied(self):
+                return
             _handle_extension_event(self.db_path, payload)
             self.write_json(200, {"ok": True})
             return
 
         # POST /extension/command-results
         if parts == ["extension", "command-results"]:
+            if _control_plane_denied(self):
+                return
             cmd_id = int(payload.get("id") or 0)
             if cmd_id:
                 db.complete_command(self.db_path, cmd_id, payload.get("result"))
@@ -350,6 +399,8 @@ class ApiHandler(BaseHTTPRequestHandler):
 
         # POST /extension/heartbeat
         if parts == ["extension", "heartbeat"]:
+            if _control_plane_denied(self):
+                return
             client_id = payload.get("client_id") or "default"
             db.update_heartbeat(self.db_path, client_id,
                                 version=payload.get("version"),
@@ -376,6 +427,8 @@ class ApiHandler(BaseHTTPRequestHandler):
 
         # PATCH /tasks/{task_key}
         if len(parts) == 2 and parts[0] == "tasks":
+            if _control_plane_denied(self):
+                return
             result = db.update_task(self.db_path, parts[1], payload)
             if result is None:
                 raise ValueError("No updatable fields provided.")
@@ -384,6 +437,8 @@ class ApiHandler(BaseHTTPRequestHandler):
 
         # PATCH /schedule/today/mode
         if parts == ["schedule", "today", "mode"]:
+            if _control_plane_denied(self):
+                return
             mode = str(payload.get("mode") or "")
             if mode not in ("auto", "manual"):
                 raise ValueError("mode must be 'auto' or 'manual'.")
@@ -408,9 +463,14 @@ class ApiHandler(BaseHTTPRequestHandler):
 
 def _handle_extension_event(db_path: Path, payload: dict) -> None:
     event_type = payload.get("event_type") or ""
-    run_id = payload.get("run_id") or ""
+    _raw_rid = payload.get("run_id")
+    run_id = str(_raw_rid).strip() if _raw_rid is not None and str(_raw_rid).strip() else ""
     client_id = payload.get("client_id") or "default"
-    tab_id = payload.get("tab_id")
+    raw_tab = payload.get("tab_id")
+    try:
+        tab_id = int(raw_tab) if raw_tab is not None and str(raw_tab).strip() != "" else None
+    except (TypeError, ValueError):
+        tab_id = None
     detail = payload.get("detail") or {}
 
     db.update_heartbeat(db_path, client_id, run_id=run_id or None)
@@ -425,14 +485,22 @@ def _handle_extension_event(db_path: Path, payload: dict) -> None:
     task_key = tr["task_key"]
 
     if event_type == "tab_opened":
-        db.update_task_run(db_path, run_id, status="page_ready", stage="reload_page",
-                           tab_id=tab_id)
+        u = payload.get("target_url")
+        u_s = str(u).strip() if u else ""
+        kwargs: dict = {"status": "page_ready", "stage": "reload_page"}
+        if tab_id is not None:
+            kwargs["tab_id"] = tab_id
+        if u_s:
+            kwargs["target_url"] = u_s
+        db.update_task_run(db_path, run_id, **kwargs)
         db.log_event(db_path, run_id, schedule_date, task_key,
                      "tab_opened", f"标签页已打开 tab_id={tab_id}", detail=detail)
 
     elif event_type == "capture_started":
-        db.update_task_run(db_path, run_id, status="capturing", stage="capture_response",
-                           tab_id=tab_id)
+        cap_kw: dict = {"status": "capturing", "stage": "capture_response"}
+        if tab_id is not None:
+            cap_kw["tab_id"] = tab_id
+        db.update_task_run(db_path, run_id, **cap_kw)
         db.log_event(db_path, run_id, schedule_date, task_key,
                      "capture_started", "开始截获接口", detail=detail)
 
@@ -474,7 +542,8 @@ def _handle_extension_event(db_path: Path, payload: dict) -> None:
 def cmd_serve(args: argparse.Namespace) -> int:
     db_path = args.db.resolve()
     db.init_db(db_path)
-    sched.start_scheduler()
+    if not _cfg.DATA_LAYER_ONLY:
+        sched.start_scheduler()
     server = ThreadingHTTPServer((args.host, args.port), ApiHandler)
     server.db_path = db_path  # type: ignore[attr-defined]
     log = logging.getLogger("workstudio")

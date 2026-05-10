@@ -1,0 +1,8 @@
+/* 全局覆盖与扩展页面基线样式；Ant Design 主题优先用 ConfigProvider。 */
+:root {
+  color-scheme: light;
+}
+
+body {
+  margin: 0;
+}

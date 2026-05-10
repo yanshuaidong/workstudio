@@ -1,0 +1,9 @@
+node_modules/
+build/
+.plasmo/
+.cache/
+.parcel-cache/
+dist/
+*.log
+.env.local
+.vercel/

@@ -11,10 +11,14 @@ export type Capture = {
   rows: any[]
 }
 
+/** 采集入口：`data_layer` = 插件自建 run 并入后端表；其余为历史入口。 */
+export type CaptureKind = "service_scheduler" | "extension_panel" | "data_layer"
+
 export type CollectorSession = {
   tabId: number | null
   attached: boolean
   datasetKey: string
+  captureKind: CaptureKind | null
   status: string
   startedAt: string | null
   lastError: string
@@ -33,4 +37,6 @@ export type CollectorSession = {
   nextClickAt: string | null
   lastScheduledPn: number | null
   serviceBaseUrl: string
+  /** POST /runs/:id/finish 时带给后端的 trade_date（远端写入用） */
+  reportTradeDate: string | null
 }

@@ -7,6 +7,7 @@ export function blankSession(tabId: number | null, datasetKey = "stock_daily"): 
     tabId,
     attached: false,
     datasetKey,
+    captureKind: null,
     status: "idle",
     startedAt: null,
     lastError: "",
@@ -24,7 +25,8 @@ export function blankSession(tabId: number | null, datasetKey = "stock_daily"): 
     nextDelayMs: null,
     nextClickAt: null,
     lastScheduledPn: null,
-    serviceBaseUrl: DEFAULT_LOCAL_SERVICE
+    serviceBaseUrl: DEFAULT_LOCAL_SERVICE,
+    reportTradeDate: null,
   }
 }
 
@@ -36,6 +38,7 @@ export function publicSession(session: CollectorSession) {
     startedAt: session.startedAt,
     lastError: session.lastError,
     datasetKey: session.datasetKey,
+    captureKind: session.captureKind ?? null,
     datasetLabel: datasetConfig(session.datasetKey).label,
     lastCapture: session.lastCapture ? {
       fetched_at: session.lastCapture.fetched_at,
@@ -57,7 +60,8 @@ export function publicSession(session: CollectorSession) {
     nextDelayMs: session.nextDelayMs,
     nextClickAt: session.nextClickAt,
     lastScheduledPn: session.lastScheduledPn,
-    serviceBaseUrl: session.serviceBaseUrl
+    serviceBaseUrl: session.serviceBaseUrl,
+    reportTradeDate: session.reportTradeDate,
   }
 }
 

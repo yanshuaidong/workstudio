@@ -216,7 +216,7 @@ def _trigger_remote_write(task_run: dict, db):
     def _write():
         from db_local import (
             create_remote_batch, finish_remote_batch, update_task_run,
-            finish_task_run, log_event, now_iso, get_today_task_runs,
+            log_event, get_task_run, today_str,
         )
         from db_remote import write_stock_daily, write_fund_flow
         from tasks_def import TASK_MAP
@@ -224,6 +224,7 @@ def _trigger_remote_write(task_run: dict, db):
         from trading_calendar import resolve_trade_date
         run_id = task_run["run_id"]
         task_key = task_run["task_key"]
+        sched_date = task_run.get("schedule_date") or today_str()
         _raw = task_run.get("trade_date") or None
         try:
             trade_date, _ = resolve_trade_date(_raw, db)
@@ -243,18 +244,19 @@ def _trigger_remote_write(task_run: dict, db):
         try:
             inserted, updated = write_fn(run_id, trade_date, db)
             finish_remote_batch(db, batch_id, "completed", inserted=inserted, updated=updated)
-            update_task_run(db, run_id, status="completed",
-                            rows_written_remote=inserted + updated)
-            log_event(db, run_id, task_run["schedule_date"], task_key,
+            if get_task_run(db, run_id):
+                update_task_run(db, run_id, status="completed",
+                                rows_written_remote=inserted + updated)
+            log_event(db, run_id, sched_date, task_key,
                       "remote_write_done",
                       f"远端写入完成：{remote_table} inserted={inserted} updated={updated}",
                       stage="write_remote")
-            # Auto mode: trigger next task
-            if task_run["mode"] == "auto" and _on_start_next_task:
+            tr_row = get_task_run(db, run_id)
+            if task_run.get("mode") == "auto" and tr_row and _on_start_next_task:
                 _on_start_next_task(task_run)
-            elif task_run["mode"] == "auto":
+            elif task_run.get("mode") == "auto" and tr_row:
                 from tasks_def import TASKS
-                _schedule_next_task_after_delay(task_run, TASKS, db, task_run["schedule_date"])
+                _schedule_next_task_after_delay(task_run, TASKS, db, sched_date)
         except Exception as exc:
             _logger.exception(
                 "remote write failed run_id=%s task_key=%s",
@@ -263,9 +265,10 @@ def _trigger_remote_write(task_run: dict, db):
             )
             err = str(exc)
             finish_remote_batch(db, batch_id, "failed", error=err)
-            update_task_run(db, run_id, status="failed", error_code="remote_write_error",
-                            error_message=err[:500])
-            log_event(db, run_id, task_run["schedule_date"], task_key,
+            if get_task_run(db, run_id):
+                update_task_run(db, run_id, status="failed", error_code="remote_write_error",
+                                error_message=err[:500])
+            log_event(db, run_id, sched_date, task_key,
                       "remote_write_failed", f"远端写入失败：{err[:200]}",
                       level="error", stage="write_remote")
 

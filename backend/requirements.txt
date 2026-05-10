@@ -1,5 +1,9 @@
-# 在仓库根目录或 backend 目录下执行其一：
-#   python -m pip install -r backend/requirements.txt
-#   cd backend && python -m pip install -r requirements.txt
+# Aligned with backend architecture doc; start_prod_win.ps1 runs pip install -r before start.
+# Manual: python -m pip install -r backend/requirements.txt (from repo root or backend)
 
-pymysql>=1.1.0,<3
+fastapi>=0.100,<1
+uvicorn[standard]>=0.24,<1
+sqlalchemy>=2.0,<3
+pymysql>=1.1,<3
+pydantic-settings>=2,<3
+python-dotenv>=1,<2

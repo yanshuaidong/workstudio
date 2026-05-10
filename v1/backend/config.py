@@ -23,6 +23,18 @@ def _load_env() -> None:
 
 _load_env()
 
+
+def _env_bool(key: str, default: bool) -> bool:
+    v = os.environ.get(key)
+    if v is None:
+        return default
+    return v.strip().lower() in ("1", "true", "yes", "on")
+
+
+# True：HTTP 只做数据层（本地行情 SQLite + 远端 MySQL）；调度、看板、扩展指令队列由浏览器插件负责。
+# 设为 0 可恢复旧版「后端控制面」。
+DATA_LAYER_ONLY = _env_bool("WORKSTUDIO_DATA_LAYER_ONLY", True)
+
 DB_PATH = Path(os.environ.get("LOCAL_DB_PATH", str(REPO_ROOT / "database" / "stock.sqlite")))
 
 MYSQL_HOST = os.environ.get("DB_HOST", "localhost")

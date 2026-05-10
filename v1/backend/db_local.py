@@ -788,6 +788,13 @@ def latest_run(db_path: Path) -> dict:
     return {"ok": True, "run": run}
 
 
+def get_compat_run(db_path: Path, run_id: str) -> dict | None:
+    """Legacy `runs` 表行（POST /runs 建单）；用于数据层模式下推断 task_key。"""
+    init_db(db_path)
+    with connect(db_path) as conn:
+        return dict_row(conn.execute("SELECT * FROM runs WHERE id=?", (run_id,)).fetchone())
+
+
 # --------------------------------------------------------------------------- #
 # Events
 # --------------------------------------------------------------------------- #
@@ -970,12 +977,19 @@ def get_dashboard_today(db_path: Path, date: str) -> dict:
             for b in batches:
                 run_batch_map.setdefault(b["run_id"], []).append(b)
 
-    # Build task status summary (one entry per task, showing latest run)
+    # Build task status summary (one entry per task, showing the most recently *touched* run).
+    # Using updated_at avoids picking a newer pending row while an older run is still capturing
+    # (same task_key, two rows same day) and missing tab_id / target_url on the dashboard.
     task_summary = []
     latest_by_task: dict[str, dict] = {}
     for r in task_runs:
         tk = r["task_key"]
-        if tk not in latest_by_task or r["created_at"] > latest_by_task[tk]["created_at"]:
+        prev = latest_by_task.get(tk)
+        if prev is None:
+            latest_by_task[tk] = r
+            continue
+        ru, pu = r.get("updated_at") or "", prev.get("updated_at") or ""
+        if ru > pu or (ru == pu and (r.get("created_at") or "") > (prev.get("created_at") or "")):
             latest_by_task[tk] = r
 
     for t in tasks:
@@ -1001,6 +1015,8 @@ def get_dashboard_today(db_path: Path, date: str) -> dict:
             "stage": run["stage"] if run else None,
             "mode": run["mode"] if run else None,
             "trade_date": run["trade_date"] if run else None,
+            "target_url": run["target_url"] if run else None,
+            "tab_id": run["tab_id"] if run else None,
             "started_at": run["started_at"] if run else None,
             "finished_at": run["finished_at"] if run else None,
             "deadline_at": run["deadline_at"] if run else None,

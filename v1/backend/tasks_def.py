@@ -32,3 +32,11 @@ TASKS: list[dict] = [
 ]
 
 TASK_MAP: dict[str, dict] = {t["task_key"]: t for t in TASKS}
+
+SOURCE_TO_TASK_KEY: dict[str, str] = {t["source"]: t["task_key"] for t in TASKS}
+
+
+def task_key_for_source(source: str | None) -> str | None:
+    if not source:
+        return None
+    return SOURCE_TO_TASK_KEY.get(source)
