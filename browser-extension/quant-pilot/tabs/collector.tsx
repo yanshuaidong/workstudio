@@ -29,10 +29,6 @@ function CollectorInner() {
         <Typography.Title level={3} style={{ margin: 0 }}>
           Quant Pilot — 采集控制台
         </Typography.Title>
-        <Typography.Paragraph type="secondary" style={{ margin: 0 }}>
-          Service Worker、内容脚本与 debugger 等业务逻辑按需在此编排；UI 入口使用 React + Ant
-          Design，HTTP 网关约定为后端 <Typography.Text code>backend/</Typography.Text>。
-        </Typography.Paragraph>
         <Card title="后端连通性" bordered={false}>
           <Space direction="vertical" style={{ width: "100%" }} size={12}>
             <Typography.Text>

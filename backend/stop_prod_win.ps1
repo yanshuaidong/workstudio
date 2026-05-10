@@ -1,4 +1,4 @@
-﻿# Workstudio backend (FastAPI) - Windows production stop (uses backend_prod.pid)
+# Workstudio backend (FastAPI) - Windows production stop (uses backend_prod.pid)
 # Run:
 #   powershell -NoProfile -ExecutionPolicy Bypass -File .\stop_prod_win.ps1
 
@@ -7,7 +7,7 @@ $Root = $PSScriptRoot
 $backendPidFile = Join-Path $Root 'backend_prod.pid'
 
 if (-not (Test-Path -LiteralPath $backendPidFile)) {
-  Write-Host "INFO: PID file not found (backend_prod.pid); backend may not have been started via start_prod_win.ps1."
+  Write-Host "INFO: PID file not found (backend_prod.pid); backend may not have been started via run_prod_win.ps1."
   exit 0
 }
 

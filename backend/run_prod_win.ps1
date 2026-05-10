@@ -1,9 +1,10 @@
-﻿# Workstudio backend (FastAPI) - Windows production start (PID in backend_prod.pid)
+# Workstudio backend (FastAPI) - Windows production start (PID in backend_prod.pid)
 # Run from backend directory:
-#   powershell -NoProfile -ExecutionPolicy Bypass -File .\start_prod_win.ps1
+#   powershell -NoProfile -ExecutionPolicy Bypass -File .\run_prod_win.ps1
 # Steps: env check -> (optional) pip install -> import check -> app/main.py -> uvicorn
 # Listen: BACKEND_HOST / BACKEND_PORT; else repo-root .env; default 127.0.0.1:8000
 # Skip pip: $env:SKIP_BACKEND_DEPS = "1"
+# Always run pip even if imports succeed (sync requirements.txt): $env:BACKEND_FORCE_PIP = "1"
 
 $ErrorActionPreference = 'Stop'
 $Root = $PSScriptRoot
@@ -85,15 +86,23 @@ function Install-Dependencies {
   param([Parameter(Mandatory)][string]$Exe)
   $req = Join-Path $Root 'requirements.txt'
   $proj = Join-Path $Root 'pyproject.toml'
+  $forcePip = [Environment]::GetEnvironmentVariable('BACKEND_FORCE_PIP', 'Process')
+  if ($forcePip -ne '1') {
+    $null = & $Exe -c 'import uvicorn, fastapi' 2>&1
+    if ($LASTEXITCODE -eq 0) {
+      Write-Host 'DEPS: uvicorn/fastapi import OK, skipping pip.'
+      return
+    }
+  }
   if (Test-Path -LiteralPath $req) {
     Write-Host "DEPS: pip install -r requirements.txt ..."
     Invoke-Py -Exe $Exe -ArgumentList @(
-      '-m', 'pip', 'install', '--disable-pip-version-check', '-r', $req
+      '-m', 'pip', 'install', '-qq', '--disable-pip-version-check', '-r', $req
     )
   } elseif (Test-Path -LiteralPath $proj) {
     Write-Host "DEPS: pip install -e . (pyproject.toml) ..."
     Invoke-Py -Exe $Exe -ArgumentList @(
-      '-m', 'pip', 'install', '--disable-pip-version-check', '-e', $Root
+      '-m', 'pip', 'install', '-qq', '--disable-pip-version-check', '-e', $Root
     )
   } else {
     Write-Host "ERROR: neither backend/requirements.txt nor pyproject.toml found; cannot install dependencies." -ForegroundColor Red

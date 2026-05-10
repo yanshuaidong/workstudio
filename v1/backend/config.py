@@ -44,7 +44,7 @@ MYSQL_PASSWORD = os.environ.get("DB_PASSWORD", "")
 MYSQL_DB = os.environ.get("DB_NAME", "stock")
 
 SERVER_HOST = os.environ.get("LOCAL_HOST", "127.0.0.1")
-SERVER_PORT = int(os.environ.get("LOCAL_PORT", "17890"))
+SERVER_PORT = int(os.environ.get("LOCAL_PORT", "8000"))
 
 TASK_TIMEOUT_SECONDS = 3600
 INTER_TASK_DELAY_SECONDS = 180

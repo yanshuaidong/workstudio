@@ -1,4 +1,4 @@
-# Aligned with backend architecture doc; start_prod_win.ps1 runs pip install -r before start.
+# Aligned with backend architecture doc; run_prod_win.ps1 runs pip install -r before start.
 # Manual: python -m pip install -r backend/requirements.txt (from repo root or backend)
 
 fastapi>=0.100,<1
