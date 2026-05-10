@@ -65,7 +65,8 @@ function Invoke-Py {
 
 function Test-PythonVersionOk {
   param([Parameter(Mandatory)][string]$Exe)
-  $out = & $Exe -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>&1
+  # Avoid embedded " in -c: Windows argv quoting strips inner double-quotes and breaks the one-liner.
+  $out = & $Exe -c 'import sys; print(str(sys.version_info.major) + chr(46) + str(sys.version_info.minor))' 2>&1
   if ($LASTEXITCODE -ne 0) {
     Write-Host "ERROR: failed to run Python: $out" -ForegroundColor Red
     exit 1
