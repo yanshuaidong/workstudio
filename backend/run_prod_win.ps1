@@ -7,6 +7,11 @@
 # Always run pip even if imports succeed (sync requirements.txt): $env:BACKEND_FORCE_PIP = "1"
 
 $ErrorActionPreference = 'Stop'
+# PS 7.3+ turns non-zero native exit codes into terminating errors under Stop policy.
+# We need to check $LASTEXITCODE manually in several places, so disable that behaviour.
+if (Test-Path Variable:/PSNativeCommandUseErrorActionPreference) {
+  $PSNativeCommandUseErrorActionPreference = $false
+}
 $Root = $PSScriptRoot
 Set-Location -LiteralPath $Root
 
@@ -89,8 +94,12 @@ function Install-Dependencies {
   $proj = Join-Path $Root 'pyproject.toml'
   $forcePip = [Environment]::GetEnvironmentVariable('BACKEND_FORCE_PIP', 'Process')
   if ($forcePip -ne '1') {
+    $prevEAP = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
     $null = & $Exe -c 'import uvicorn, fastapi' 2>&1
-    if ($LASTEXITCODE -eq 0) {
+    $importOk = ($LASTEXITCODE -eq 0)
+    $ErrorActionPreference = $prevEAP
+    if ($importOk) {
       Write-Host 'DEPS: uvicorn/fastapi import OK, skipping pip.'
       return
     }
@@ -113,8 +122,12 @@ function Install-Dependencies {
 
 function Test-RuntimeImports {
   param([Parameter(Mandatory)][string]$Exe)
+  $prevEAP = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
   $err = & $Exe -c 'import uvicorn, fastapi' 2>&1
-  if ($LASTEXITCODE -ne 0) {
+  $importExit = $LASTEXITCODE
+  $ErrorActionPreference = $prevEAP
+  if ($importExit -ne 0) {
     if ($err) {
       Write-Host $err
     }
