@@ -1,5 +1,0 @@
-# 在仓库根目录或 backend 目录下执行其一：
-#   python -m pip install -r backend/requirements.txt
-#   cd backend && python -m pip install -r requirements.txt
-
-pymysql>=1.1.0,<3
