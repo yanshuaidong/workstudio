@@ -23,11 +23,12 @@ async function request(method: string, path: string, body?: unknown): Promise<un
   }
   const res = await fetch(`${_origin}${path}`, opts)
   const text = await res.text()
-  const json = text ? JSON.parse(text) : null
   if (!res.ok) {
-    throw Object.assign(new Error((json as any)?.detail ?? `HTTP ${res.status}`), { status: res.status })
+    let detail: string | undefined
+    try { detail = (JSON.parse(text) as any)?.detail } catch {}
+    throw Object.assign(new Error(detail ?? text || `HTTP ${res.status}`), { status: res.status })
   }
-  return json
+  return text ? JSON.parse(text) : null
 }
 
 // ---------------------------------------------------------------------------
